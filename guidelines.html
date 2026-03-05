@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Review Guidelines — AI Peer Review System</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: "Segoe UI", Arial, sans-serif;
+      background: #f0f4f8;
+      color: #1a1a2e;
+      min-height: 100vh;
+    }
+
+    /* ── Header ── */
+    header {
+      background: linear-gradient(135deg, #1a5c96 0%, #0d3d6e 100%);
+      color: #fff;
+      padding: 20px 32px 16px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+    }
+    .header-inner {
+      max-width: 1080px;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    header h1 { font-size: 1.5rem; font-weight: 700; }
+    header p  { font-size: 0.88rem; opacity: 0.82; margin-top: 4px; }
+
+    /* ── Nav ── */
+    nav {
+      background: #0d3d6e;
+      padding: 0 32px;
+    }
+    .nav-inner {
+      max-width: 1080px;
+      margin: 0 auto;
+      display: flex;
+      gap: 0;
+    }
+    nav a {
+      display: inline-block;
+      padding: 11px 22px;
+      color: rgba(255,255,255,0.75);
+      text-decoration: none;
+      font-size: 0.9rem;
+      font-weight: 500;
+      border-bottom: 3px solid transparent;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    nav a:hover  { color: #fff; border-color: rgba(255,255,255,0.4); }
+    nav a.active { color: #fff; border-color: #5ab0f0; }
+
+    /* ── Main ── */
+    main {
+      max-width: 1080px;
+      margin: 32px auto;
+      padding: 0 16px 60px;
+    }
+
+    /* ── Version bar ── */
+    .version-bar {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+      background: #fff;
+      border: 1px solid #dce8f5;
+      border-radius: 8px;
+      padding: 14px 20px;
+      margin-bottom: 28px;
+      font-size: 0.88rem;
+      color: #556;
+    }
+    .version-bar .badge {
+      background: #1a5c96;
+      color: #fff;
+      border-radius: 20px;
+      padding: 3px 12px;
+      font-size: 0.82rem;
+      font-weight: 700;
+    }
+    .version-bar strong { color: #222; }
+    .version-bar .spacer { flex: 1; }
+    .valid-chip {
+      background: #d4edda; color: #155724;
+      border-radius: 20px; padding: 3px 12px; font-size: 0.82rem; font-weight: 600;
+    }
+
+    /* ── Section titles ── */
+    .section-title {
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: #1a5c96;
+      margin: 36px 0 16px;
+      padding-bottom: 8px;
+      border-bottom: 2px solid #dce8f5;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    /* ── Stage cards ── */
+    .stages-grid {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .stage-card {
+      background: #fff;
+      border-radius: 10px;
+      border: 1px solid #dce8f5;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.07);
+      overflow: hidden;
+    }
+
+    .stage-header {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 14px 20px;
+      cursor: pointer;
+      user-select: none;
+      transition: background 0.15s;
+    }
+    .stage-header:hover { background: #f5f9ff; }
+
+    .stage-num {
+      width: 36px; height: 36px;
+      border-radius: 50%;
+      background: #1a5c96;
+      color: #fff;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 700; font-size: 0.95rem;
+      flex-shrink: 0;
+    }
+    .stage-num.s2 { background: #1976a8; }
+    .stage-num.s3 { background: #1d7a8a; }
+    .stage-num.s4 { background: #0d7f46; }
+    .stage-num.s5 { background: #5c7a1a; }
+    .stage-num.s6 { background: #7a5c1a; }
+    .stage-num.s7 { background: #7a1a1a; }
+    .stage-num.s8 { background: #4a1a7a; }
+
+    .stage-title-wrap { flex: 1; }
+    .stage-title { font-size: 1rem; font-weight: 700; color: #1a2e4a; }
+    .stage-desc  { font-size: 0.83rem; color: #667; margin-top: 3px; }
+
+    .stage-chevron {
+      font-size: 1.1rem; color: #8aabb8;
+      transition: transform 0.2s;
+    }
+    .stage-card.open .stage-chevron { transform: rotate(180deg); }
+
+    .stage-body {
+      display: none;
+      padding: 0 20px 20px 70px;
+      border-top: 1px solid #edf2f9;
+    }
+    .stage-card.open .stage-body { display: block; }
+
+    .checks-list {
+      list-style: none;
+      margin: 14px 0 0;
+    }
+    .checks-list li {
+      padding: 7px 0 7px 22px;
+      position: relative;
+      font-size: 0.91rem;
+      line-height: 1.55;
+      color: #2a3a4a;
+      border-bottom: 1px solid #f0f4f8;
+    }
+    .checks-list li:last-child { border-bottom: none; }
+    .checks-list li::before {
+      content: "✓";
+      position: absolute;
+      left: 0;
+      color: #1a5c96;
+      font-weight: 700;
+    }
+
+    .tag-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 14px;
+    }
+    .tag {
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 0.80rem;
+      font-weight: 600;
+    }
+    .tag-scope   { background: #e3f2fd; color: #1565c0; }
+    .tag-major   { background: #fde8e8; color: #9b0000; }
+    .tag-minor   { background: #fff3e0; color: #8a4a00; }
+    .tag-suggest { background: #e8f5e9; color: #1b5e20; }
+    .tag-decision { background: #ede7f6; color: #4527a0; }
+
+    .instruction-box {
+      background: #f0f7ff;
+      border-left: 3px solid #1a5c96;
+      border-radius: 0 6px 6px 0;
+      padding: 10px 14px;
+      font-size: 0.88rem;
+      color: #2a4a70;
+      margin-top: 14px;
+      line-height: 1.55;
+    }
+
+    .decision-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 14px;
+      font-size: 0.89rem;
+    }
+    .decision-table th {
+      background: #e8eef7;
+      text-align: left;
+      padding: 8px 12px;
+      color: #2a3a5a;
+    }
+    .decision-table td {
+      padding: 9px 12px;
+      border-bottom: 1px solid #edf2f9;
+      vertical-align: top;
+    }
+    .decision-table tr:last-child td { border-bottom: none; }
+    .decision-label { font-weight: 700; white-space: nowrap; }
+    .dec-accept { color: #0a6630; }
+    .dec-minor  { color: #7a4a00; }
+    .dec-major  { color: #8a2000; }
+    .dec-reject { color: #7a0000; }
+    .dec-resub  { color: #4a007a; }
+
+    /* ── Journal cards ── */
+    .journal-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      gap: 16px;
+    }
+    .journal-card {
+      background: #fff;
+      border-radius: 10px;
+      border: 1px solid #dce8f5;
+      padding: 18px 20px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.07);
+    }
+    .journal-card h3 {
+      font-size: 1rem;
+      color: #1a5c96;
+      margin-bottom: 4px;
+    }
+    .journal-key {
+      display: inline-block;
+      background: #e3f2fd;
+      color: #1565c0;
+      border-radius: 4px;
+      padding: 2px 8px;
+      font-size: 0.78rem;
+      font-weight: 700;
+      margin-bottom: 10px;
+    }
+    .journal-scope {
+      font-size: 0.85rem;
+      color: #556;
+      margin-bottom: 12px;
+      line-height: 1.5;
+    }
+    .journal-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 10px;
+    }
+    .jmeta-chip {
+      background: #f0f4f8;
+      border: 1px solid #dce8f5;
+      border-radius: 4px;
+      padding: 3px 9px;
+      font-size: 0.79rem;
+      color: #445;
+    }
+    .journal-wl { font-size: 0.83rem; color: #556; }
+    .journal-wl span { font-weight: 600; color: #2a3a5a; }
+    .journal-sections { margin-top: 10px; }
+    .journal-sections summary {
+      cursor: pointer;
+      font-size: 0.84rem;
+      color: #1a5c96;
+      font-weight: 600;
+    }
+    .journal-sections ol {
+      margin: 8px 0 0 18px;
+      font-size: 0.83rem;
+      color: #445;
+      line-height: 1.7;
+    }
+
+    /* ── Changelog ── */
+    .changelog-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.89rem;
+      background: #fff;
+      border-radius: 10px;
+      overflow: hidden;
+      border: 1px solid #dce8f5;
+    }
+    .changelog-table th {
+      background: #1a5c96;
+      color: #fff;
+      text-align: left;
+      padding: 10px 14px;
+    }
+    .changelog-table td {
+      padding: 10px 14px;
+      border-bottom: 1px solid #edf2f9;
+      vertical-align: top;
+    }
+    .changelog-table tr:last-child td { border-bottom: none; }
+    .changelog-table tr:nth-child(even) td { background: #f8fafd; }
+    .ver-badge {
+      background: #e3f2fd;
+      color: #1565c0;
+      border-radius: 4px;
+      padding: 2px 8px;
+      font-size: 0.80rem;
+      font-weight: 700;
+    }
+
+    /* ── SME note ── */
+    .sme-note {
+      background: #fff8e1;
+      border: 1px solid #ffe082;
+      border-radius: 8px;
+      padding: 16px 20px;
+      margin-top: 36px;
+      font-size: 0.88rem;
+      line-height: 1.65;
+      color: #4a3800;
+    }
+    .sme-note strong { color: #2a2200; }
+    .sme-note code {
+      background: #fff3cd;
+      border-radius: 3px;
+      padding: 1px 5px;
+      font-family: monospace;
+      font-size: 0.84rem;
+    }
+
+    /* ── Loading ── */
+    #loading { text-align: center; padding: 60px 20px; color: #667; font-size: 0.95rem; }
+    .spinner {
+      display: inline-block;
+      width: 32px; height: 32px;
+      border: 3px solid #dce8f5;
+      border-top-color: #1a5c96;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-bottom: 14px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Responsive ── */
+    @media (max-width: 600px) {
+      .journal-grid { grid-template-columns: 1fr; }
+      .stage-body { padding-left: 16px; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="header-inner">
+    <div>
+      <h1>&#x1F4CB; AI-Assisted Peer Review System</h1>
+      <p>Review guidelines powering the 8-stage editorial framework</p>
+    </div>
+    <div id="header-version" style="font-size:0.82rem;opacity:0.8;text-align:right;"></div>
+  </div>
+</header>
+
+<nav>
+  <div class="nav-inner">
+    <a href="/">&#x1F50D; Review Tool</a>
+    <a href="/guidelines-page" class="active">&#x1F4D6; Guidelines</a>
+  </div>
+</nav>
+
+<main>
+
+  <div id="loading">
+    <div class="spinner"></div><br>Loading guidelines…
+  </div>
+
+  <div id="content" style="display:none">
+
+    <!-- Version bar -->
+    <div class="version-bar" id="version-bar">
+      <!-- filled by JS -->
+    </div>
+
+    <!-- Stage 1-8 -->
+    <div class="section-title">&#x1F4CB; 8-Stage Review Framework</div>
+    <div class="stages-grid" id="stages-grid">
+      <!-- filled by JS -->
+    </div>
+
+    <!-- Journal Requirements -->
+    <div class="section-title">&#x1F4F0; Configured Journals</div>
+    <div class="journal-grid" id="journal-grid">
+      <!-- filled by JS -->
+    </div>
+
+    <!-- Changelog -->
+    <div class="section-title">&#x1F4DC; Guidelines Changelog</div>
+    <table class="changelog-table" id="changelog-table">
+      <thead>
+        <tr>
+          <th>Version</th>
+          <th>Date</th>
+          <th>Author</th>
+          <th>Changes</th>
+        </tr>
+      </thead>
+      <tbody id="changelog-body"></tbody>
+    </table>
+
+    <!-- SME note -->
+    <div class="sme-note">
+      <strong>&#x270F;&#xFE0F; For Editors &amp; Subject Matter Experts (SMEs)</strong><br><br>
+      All review checks, journal requirements, and decision criteria on this page are maintained in a
+      single file: <code>guidelines/review_guidelines.yaml</code> in the project repository.<br><br>
+      To update the review framework:
+      <ol style="margin: 10px 0 0 20px; line-height: 1.9;">
+        <li>Open <code>guidelines/review_guidelines.yaml</code> in any text editor</li>
+        <li>Add, edit, or remove checks under the relevant stage's <code>checks:</code> list</li>
+        <li>Update the <code>version</code> and <code>last_updated</code> fields in <code>metadata:</code></li>
+        <li>Add an entry to <code>changelog:</code> at the bottom of the file</li>
+        <li>Save and commit the file — the next review will use your updated guidelines</li>
+      </ol>
+      <br>
+      To add a new journal, add an entry under <code>journal_overrides:</code> with its scope,
+      word limits, required sections, and reference style.<br><br>
+      See <strong>DEVELOPER_GUIDE.md</strong> in the repository for detailed step-by-step instructions.
+    </div>
+
+  </div>
+</main>
+
+<footer style="text-align:center;padding:24px;font-size:0.82rem;color:#889;border-top:1px solid #dde;">
+  AI-Assisted Peer Review &nbsp;|&nbsp; Powered by Claude AI &nbsp;|&nbsp;
+  Guidelines version: <span id="footer-ver">—</span>
+</footer>
+
+<script>
+  const STAGE_COLORS = ['','s2','s3','s4','s5','s6','s7','s8'];
+
+  function esc(str) {
+    return (str || "")
+      .replace(/&/g,"&amp;").replace(/</g,"&lt;")
+      .replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+  }
+
+  function decisionClass(label) {
+    const l = (label || "").toLowerCase();
+    if (l.includes("accept as is")) return "dec-accept";
+    if (l.includes("minor"))  return "dec-minor";
+    if (l.includes("major"))  return "dec-major";
+    if (l.includes("reject and")) return "dec-resub";
+    if (l.includes("reject")) return "dec-reject";
+    return "";
+  }
+
+  function renderVersionBar(meta, valid) {
+    const bar = document.getElementById("version-bar");
+    bar.innerHTML = `
+      <span class="badge">v${esc(meta.version || "—")}</span>
+      <span><strong>Last updated:</strong> ${esc(meta.last_updated || "—")}</span>
+      <span><strong>Maintained by:</strong> ${esc(meta.maintained_by || "—")}</span>
+      <span><strong>Applies to:</strong> ${esc(meta.journal_name || "—")}</span>
+      <span class="spacer"></span>
+      <span class="valid-chip">&#x2713; Guidelines valid</span>
+    `;
+    document.getElementById("header-version").textContent = `Guidelines v${meta.version || "—"}`;
+    document.getElementById("footer-ver").textContent = meta.version || "—";
+  }
+
+  function renderStages(stages) {
+    const grid = document.getElementById("stages-grid");
+    grid.innerHTML = "";
+
+    stages.forEach((stage, idx) => {
+      const num = stage.number;
+      const colorClass = STAGE_COLORS[parseInt(num) - 1] || "";
+
+      // Checks
+      const checksHtml = (stage.checks || []).length
+        ? `<ul class="checks-list">${stage.checks.map(c => `<li>${esc(c)}</li>`).join("")}</ul>`
+        : "";
+
+      // Scope fit tags
+      const scopeHtml = (stage.scope_fit_options || []).length
+        ? `<div class="tag-row">
+             <span style="font-size:0.83rem;color:#667;align-self:center;">Scope Fit rating:</span>
+             ${stage.scope_fit_options.map(o => `<span class="tag tag-scope">${esc(o)}</span>`).join("")}
+           </div>` : "";
+
+      // Severity tags
+      const sevHtml = (stage.severity_labels || []).length
+        ? `<div class="tag-row">
+             <span style="font-size:0.83rem;color:#667;align-self:center;">Issue severity labels:</span>
+             ${stage.severity_labels.map(l => {
+               const cls = l==="Major"?"tag-major":l==="Minor"?"tag-minor":"tag-suggest";
+               return `<span class="tag ${cls}">${esc(l)}</span>`;
+             }).join("")}
+           </div>` : "";
+
+      // Decision options table
+      const decHtml = (stage.decision_options || []).length
+        ? `<table class="decision-table">
+             <thead><tr><th>Decision</th><th>When to use</th></tr></thead>
+             <tbody>
+               ${stage.decision_options.map(d => `
+                 <tr>
+                   <td class="decision-label ${decisionClass(d.label)}">${esc(d.label)}</td>
+                   <td>${esc(d.criteria)}</td>
+                 </tr>`).join("")}
+             </tbody>
+           </table>` : "";
+
+      // Instruction box
+      const instrHtml = stage.instruction
+        ? `<div class="instruction-box">&#x1F4A1; ${esc(stage.instruction)}</div>` : "";
+
+      const card = document.createElement("div");
+      card.className = "stage-card";
+      card.innerHTML = `
+        <div class="stage-header" onclick="toggleStage(this)">
+          <div class="stage-num ${colorClass}">${esc(num)}</div>
+          <div class="stage-title-wrap">
+            <div class="stage-title">Stage ${esc(num)}: ${esc(stage.name)}</div>
+            ${stage.description ? `<div class="stage-desc">${esc(stage.description)}</div>` : ""}
+          </div>
+          <div class="stage-chevron">&#x25BE;</div>
+        </div>
+        <div class="stage-body">
+          ${checksHtml}${scopeHtml}${sevHtml}${decHtml}${instrHtml}
+        </div>
+      `;
+      // Open Stage 1 by default
+      if (idx === 0) card.classList.add("open");
+      grid.appendChild(card);
+    });
+  }
+
+  function renderJournals(journals) {
+    const grid = document.getElementById("journal-grid");
+    if (!journals || journals.length === 0) {
+      grid.innerHTML = `<p style="color:#889;font-size:0.9rem;">No journals configured.</p>`;
+      return;
+    }
+    grid.innerHTML = "";
+    journals.forEach(j => {
+      const wlRows = Object.entries(j.word_limits || {}).map(
+        ([k, v]) => `<span class="jmeta-chip">${esc(k.replace(/_/g," "))}: ${v} words</span>`
+      ).join("");
+
+      const sectionsHtml = (j.required_sections || []).length
+        ? `<details class="journal-sections">
+             <summary>Required sections (${j.required_sections.length})</summary>
+             <ol>${j.required_sections.map(s => `<li>${esc(s)}</li>`).join("")}</ol>
+           </details>` : "";
+
+      const card = document.createElement("div");
+      card.className = "journal-card";
+      card.innerHTML = `
+        <h3>${esc(j.full_name)}</h3>
+        <div class="journal-key">${esc(j.key)}</div>
+        <p class="journal-scope">${esc(j.scope)}</p>
+        <div class="journal-meta">
+          ${j.reference_style ? `<span class="jmeta-chip">&#x1F4DA; ${esc(j.reference_style)} style</span>` : ""}
+          ${wlRows}
+        </div>
+        ${sectionsHtml}
+      `;
+      grid.appendChild(card);
+    });
+  }
+
+  function renderChangelog(changelog) {
+    const tbody = document.getElementById("changelog-body");
+    if (!changelog || changelog.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="4" style="color:#889;padding:14px;">No changelog entries.</td></tr>`;
+      return;
+    }
+    // newest first
+    tbody.innerHTML = [...changelog].reverse().map(e => `
+      <tr>
+        <td><span class="ver-badge">${esc(e.version)}</span></td>
+        <td style="white-space:nowrap;">${esc(e.date)}</td>
+        <td>${esc(e.author)}</td>
+        <td>${esc(e.changes)}</td>
+      </tr>
+    `).join("");
+  }
+
+  function toggleStage(header) {
+    const card = header.parentElement;
+    card.classList.toggle("open");
+  }
+
+  async function loadGuidelines() {
+    try {
+      const resp = await fetch("/guidelines/full");
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+
+      renderVersionBar(data.metadata || {});
+      renderStages(data.stages || []);
+      renderJournals(data.journals || []);
+      renderChangelog(data.changelog || []);
+
+      document.getElementById("loading").style.display = "none";
+      document.getElementById("content").style.display = "block";
+    } catch (err) {
+      document.getElementById("loading").innerHTML =
+        `<p style="color:#c00;">Failed to load guidelines: ${err.message}</p>
+         <p style="margin-top:8px;font-size:0.85rem;color:#667;">
+           Ensure the application is running and <code>guidelines/review_guidelines.yaml</code> is valid.
+         </p>`;
+    }
+  }
+
+  loadGuidelines();
+</script>
+
+</body>
+</html>

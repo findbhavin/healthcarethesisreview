@@ -1,171 +1,62 @@
 """
 review_agent.py
-Core AI review logic using Claude API — 8-stage peer review framework.
+Core AI review logic — extracts manuscript text, builds the system prompt
+from guidelines/review_guidelines.yaml, and calls the Claude API.
+
+The review framework (stages, checks, decision options) is entirely defined
+in review_guidelines.yaml. Editors and SMEs can update that file without
+touching this code.
 """
 
 import os
+import logging
 import anthropic
+from guidelines.guidelines_loader import build_system_prompt
 
-SYSTEM_PROMPT = """You are a senior medical journal editor assisting with the peer review process.
-When I submit a research article (or its abstract/manuscript), you will conduct a structured review
-in the following sequential stages:
+logger = logging.getLogger(__name__)
 
-STAGE 1 — INITIAL EDITORIAL SCREENING
-Check for:
-- Completeness of submission (title, abstract, keywords, main text, references, figures/tables,
-  cover letter, author declarations)
-- Compliance with journal formatting and word count limits
-- Appropriate manuscript type (original research, review, case report, etc.)
-- Conflict of interest and funding disclosures present
-- Ethical approval and informed consent statements
-- Trial registration (if applicable)
-- Author contributions (CRediT taxonomy)
-- ORCID IDs
 
-Flag any missing or non-compliant items before proceeding.
-
-STAGE 2 — SCOPE AND NOVELTY CHECK
-- Is the topic within the journal's stated scope?
-- Does the abstract indicate genuine novelty and scientific contribution?
-- Is the research question clearly stated?
-- Is there evidence of prior literature review?
-Provide a brief "Scope Fit" rating: Strong / Marginal / Out of Scope
-
-STAGE 3 — METHODOLOGY REVIEW
-- Study design: Is it appropriate for the research question?
-- Sample size and power calculation
-- Inclusion/exclusion criteria
-- Blinding and randomization (if applicable)
-- Statistical methods: Are they appropriate and clearly described?
-- Reporting checklist compliance (CONSORT for RCTs, PRISMA for reviews, STROBE for observational,
-  CARE for case reports)
-- Potential biases identified
-List each issue with severity: Major / Minor / Suggestion
-
-STAGE 4 — RESULTS AND DATA INTEGRITY
-- Are results clearly presented?
-- Are the results in align with the objectives?
-- Do figures/tables match the text?
-- Are p-values and confidence intervals reported correctly?
-- Are there any inconsistencies in numbers across tables or text?
-- Is raw/supplementary data provided or available on request?
-
-STAGE 5 — DISCUSSION AND CONCLUSIONS
-- Do conclusions align with results (no overclaiming)?
-- Are limitations discussed honestly?
-- Is the clinical/scientific significance adequately discussed?
-- Are future directions mentioned?
-
-STAGE 6 — REFERENCES
-- Are references current and relevant?
-- Are the references genuine and not fabricated?
-- Are the references cited for each of the sentence that contains a factual claim, numerical
-  statement, established scientific knowledge, or a non-obvious assertion especially in the
-  Introduction and Discussion?
-- Are each standardized tools, established procedures, and guideline-based decisions cited with
-  appropriate reference in the Methods section?
-- Is reference cited for calculation of sample size, if required?
-- Are key papers in the field cited?
-- Are reference formatting style and completeness correct?
-
-STAGE 7 — ETHICAL AND INTEGRITY CHECKS
-- Does the work appear to involve human/animal subjects ethically?
-- Any concerns about plagiarism, image manipulation, or data fabrication
-  (flag for further tool-based screening)?
-- Duplicate submission concerns?
-- Authorship concerns (gift/ghost authorship)?
-
-STAGE 8 — OVERALL EDITORIAL RECOMMENDATION
-Summarize findings and provide one of the following decisions:
-- Accept as is
-- Minor revision
-- Major revision
-- Reject (with reason)
-- Reject and resubmit
-
-Format your final output as a structured report with clear section headings for each stage.
-Use the following output format exactly:
-
----
-PEER REVIEW REPORT
-Manuscript Title: [extracted from text or "Not provided"]
-Manuscript Type: [type]
-Date of Review: [today's date]
-Reviewer: AI-Assisted Editorial Review System
-
----
-
-STAGE 1: INITIAL EDITORIAL SCREENING
-[findings]
-
-STAGE 2: SCOPE AND NOVELTY CHECK
-Scope Fit: [Strong / Marginal / Out of Scope]
-[findings]
-
-STAGE 3: METHODOLOGY REVIEW
-[findings with severity labels]
-
-STAGE 4: RESULTS AND DATA INTEGRITY
-[findings]
-
-STAGE 5: DISCUSSION AND CONCLUSIONS
-[findings]
-
-STAGE 6: REFERENCES
-[findings]
-
-STAGE 7: ETHICAL AND INTEGRITY CHECKS
-[findings]
-
-STAGE 8: OVERALL EDITORIAL RECOMMENDATION
-Decision: [decision]
-Summary: [summary]
-Key Required Revisions:
-1. [revision]
-2. [revision]
-...
-
----
-END OF REVIEW REPORT
----
-"""
-
+# ---------------------------------------------------------------------------
+# Text Extraction
+# ---------------------------------------------------------------------------
 
 def extract_text_from_docx(file_bytes: bytes) -> str:
-    """Extract plain text from a DOCX file."""
+    """Extract plain text from a DOCX file (paragraphs + tables)."""
     import io
     from docx import Document
 
     doc = Document(io.BytesIO(file_bytes))
-    paragraphs = []
+    parts = []
     for para in doc.paragraphs:
-        if para.text.strip():
-            paragraphs.append(para.text.strip())
-    # Also extract tables
+        text = para.text.strip()
+        if text:
+            parts.append(text)
     for table in doc.tables:
         for row in table.rows:
-            row_text = " | ".join(cell.text.strip() for cell in row.cells if cell.text.strip())
+            row_text = " | ".join(
+                cell.text.strip() for cell in row.cells if cell.text.strip()
+            )
             if row_text:
-                paragraphs.append(row_text)
-    return "\n\n".join(paragraphs)
+                parts.append(row_text)
+    return "\n\n".join(parts)
 
 
 def extract_text_from_pdf(file_bytes: bytes) -> str:
-    """Extract plain text from a PDF file."""
+    """Extract plain text from a PDF file using pdfplumber."""
     import io
     import pdfplumber
 
-    text_parts = []
+    parts = []
     with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
         for page in pdf.pages:
             page_text = page.extract_text()
             if page_text:
-                text_parts.append(page_text)
-    return "\n\n".join(text_parts)
+                parts.append(page_text)
+    return "\n\n".join(parts)
 
 
 def extract_text(file_bytes: bytes, filename: str) -> str:
-    """Route to appropriate extractor based on file extension."""
+    """Route to the appropriate extractor based on file extension."""
     lower = filename.lower()
     if lower.endswith(".docx"):
         return extract_text_from_docx(file_bytes)
@@ -174,63 +65,106 @@ def extract_text(file_bytes: bytes, filename: str) -> str:
     elif lower.endswith(".txt"):
         return file_bytes.decode("utf-8", errors="replace")
     else:
-        raise ValueError(f"Unsupported file type: {filename}. Please upload DOCX, PDF, or TXT.")
+        raise ValueError(
+            f"Unsupported file type: '{filename}'. "
+            "Please upload a DOCX, PDF, or TXT file."
+        )
 
+
+# Cap very long manuscripts to keep token usage and latency reasonable.
+_MAX_MANUSCRIPT_CHARS = 80_000
+
+
+def _truncate(text: str) -> str:
+    if len(text) <= _MAX_MANUSCRIPT_CHARS:
+        return text
+    logger.warning(
+        f"Manuscript is {len(text):,} chars — truncating to {_MAX_MANUSCRIPT_CHARS:,} "
+        "to reduce latency. Consider splitting very long documents."
+    )
+    return text[:_MAX_MANUSCRIPT_CHARS] + "\n\n[NOTE: Manuscript truncated at 80,000 characters for processing.]"
+
+
+# ---------------------------------------------------------------------------
+# Review Runner
+# ---------------------------------------------------------------------------
 
 def run_review(file_bytes: bytes, filename: str, journal_name: str = "") -> dict:
     """
-    Run the 8-stage AI peer review on the uploaded manuscript.
+    Run the AI peer review on an uploaded manuscript file.
 
-    Returns a dict with:
-      - manuscript_title: str
-      - review_text: str   (full structured report)
-      - word_count: int
-      - decision: str
+    Parameters
+    ----------
+    file_bytes   : Raw bytes of the uploaded file
+    filename     : Original filename (used to detect format)
+    journal_name : Optional target journal name (used to inject journal-specific
+                   requirements from review_guidelines.yaml)
+
+    Returns
+    -------
+    dict with keys:
+      manuscript_title : str
+      review_text      : str   (full structured report)
+      word_count       : int   (approximate)
+      decision         : str   (parsed from report)
+      filename         : str
     """
     manuscript_text = extract_text(file_bytes, filename)
-
     if not manuscript_text.strip():
-        raise ValueError("Could not extract any text from the uploaded file.")
+        raise ValueError(
+            "Could not extract any readable text from the uploaded file. "
+            "Please ensure the file is not encrypted or image-only."
+        )
 
+    manuscript_text = _truncate(manuscript_text)
     word_count = len(manuscript_text.split())
+    logger.info(
+        f"Extracted {word_count} words from '{filename}' "
+        f"(journal='{journal_name or 'not specified'}')"
+    )
 
-    journal_context = ""
-    if journal_name:
-        journal_context = f"\nJournal being submitted to: {journal_name}\n"
+    # Build system prompt from guidelines YAML (picks up any SME edits)
+    system_prompt = build_system_prompt(journal_name=journal_name)
 
     user_message = (
-        f"{journal_context}"
         f"Please conduct a full peer review of the following manuscript:\n\n"
         f"--- MANUSCRIPT BEGIN ---\n{manuscript_text}\n--- MANUSCRIPT END ---"
     )
 
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
-        raise RuntimeError("ANTHROPIC_API_KEY environment variable is not set.")
+        raise RuntimeError(
+            "ANTHROPIC_API_KEY environment variable is not set. "
+            "Set it before starting the application."
+        )
 
     client = anthropic.Anthropic(api_key=api_key)
 
+    logger.info("Sending manuscript to Claude API for review...")
     message = client.messages.create(
-        model="claude-opus-4-6",
+        model="claude-sonnet-4-6",
         max_tokens=8192,
-        system=SYSTEM_PROMPT,
+        system=system_prompt,
         messages=[{"role": "user", "content": user_message}],
     )
 
     review_text = message.content[0].text
+    logger.info("Review completed successfully.")
 
-    # Parse out the decision line for quick display
+    # Parse decision from report
     decision = "See report"
     for line in review_text.splitlines():
         if line.strip().lower().startswith("decision:"):
             decision = line.split(":", 1)[1].strip()
             break
 
-    # Try to extract manuscript title
+    # Parse manuscript title from report
     manuscript_title = filename
     for line in review_text.splitlines():
         if "manuscript title:" in line.lower():
-            manuscript_title = line.split(":", 1)[1].strip()
+            candidate = line.split(":", 1)[1].strip()
+            if candidate and candidate not in ("Not provided", "[Not provided]", "—"):
+                manuscript_title = candidate
             break
 
     return {
@@ -239,4 +173,86 @@ def run_review(file_bytes: bytes, filename: str, journal_name: str = "") -> dict
         "word_count": word_count,
         "decision": decision,
         "filename": filename,
+        "journal_name": journal_name,
     }
+
+
+def stream_review(file_bytes: bytes, filename: str, journal_name: str = ""):
+    """
+    Streaming version of run_review. Yields dicts for SSE:
+      {"type": "chunk", "text": "..."}          — incremental text
+      {"type": "done",  "result": {...}}         — final result dict
+      {"type": "error", "error": "..."}          — on failure
+
+    The caller (Flask route) is responsible for JSON-encoding each dict.
+    """
+    try:
+        manuscript_text = extract_text(file_bytes, filename)
+        if not manuscript_text.strip():
+            yield {"type": "error", "error": "Could not extract text from the file. Ensure it is not encrypted or image-only."}
+            return
+
+        manuscript_text = _truncate(manuscript_text)
+        word_count = len(manuscript_text.split())
+        logger.info(
+            f"[stream] Extracted {word_count} words from '{filename}' "
+            f"(journal='{journal_name or 'not specified'}')"
+        )
+
+        system_prompt = build_system_prompt(journal_name=journal_name)
+        user_message = (
+            f"Please conduct a full peer review of the following manuscript:\n\n"
+            f"--- MANUSCRIPT BEGIN ---\n{manuscript_text}\n--- MANUSCRIPT END ---"
+        )
+
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        if not api_key:
+            yield {"type": "error", "error": "ANTHROPIC_API_KEY is not configured."}
+            return
+
+        client = anthropic.Anthropic(api_key=api_key)
+        full_text_parts = []
+
+        logger.info("[stream] Streaming review from Claude API...")
+        with client.messages.stream(
+            model="claude-sonnet-4-6",
+            max_tokens=8192,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_message}],
+        ) as stream:
+            for text_chunk in stream.text_stream:
+                full_text_parts.append(text_chunk)
+                yield {"type": "chunk", "text": text_chunk}
+
+        review_text = "".join(full_text_parts)
+        logger.info("[stream] Review stream completed.")
+
+        # Parse decision
+        decision = "See report"
+        for line in review_text.splitlines():
+            if line.strip().lower().startswith("decision:"):
+                decision = line.split(":", 1)[1].strip()
+                break
+
+        # Parse title
+        manuscript_title = filename
+        for line in review_text.splitlines():
+            if "manuscript title:" in line.lower():
+                candidate = line.split(":", 1)[1].strip()
+                if candidate and candidate not in ("Not provided", "[Not provided]", "—"):
+                    manuscript_title = candidate
+                break
+
+        result = {
+            "manuscript_title": manuscript_title,
+            "review_text": review_text,
+            "word_count": word_count,
+            "decision": decision,
+            "filename": filename,
+            "journal_name": journal_name,
+        }
+        yield {"type": "done", "result": result}
+
+    except Exception as exc:
+        logger.exception("[stream] Error during streaming review")
+        yield {"type": "error", "error": str(exc)}

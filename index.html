@@ -18,11 +18,29 @@
     header {
       background: linear-gradient(135deg, #1a5c96 0%, #0d3d6e 100%);
       color: #fff;
-      padding: 28px 32px 22px;
+      padding: 20px 32px 16px;
       box-shadow: 0 2px 8px rgba(0,0,0,0.25);
     }
     header h1 { font-size: 1.75rem; font-weight: 700; letter-spacing: -0.3px; }
     header p  { margin-top: 6px; font-size: 0.95rem; opacity: 0.85; }
+
+    /* ── Nav ── */
+    nav {
+      background: #0d3d6e;
+      padding: 0 32px;
+    }
+    nav a {
+      display: inline-block;
+      padding: 11px 22px;
+      color: rgba(255,255,255,0.75);
+      text-decoration: none;
+      font-size: 0.9rem;
+      font-weight: 500;
+      border-bottom: 3px solid transparent;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    nav a:hover  { color: #fff; border-color: rgba(255,255,255,0.4); }
+    nav a.active { color: #fff; border-color: #5ab0f0; }
 
     /* ── Main layout ── */
     main {
@@ -198,6 +216,11 @@
   <p>Upload a journal manuscript for automated 8-stage editorial screening powered by Claude AI</p>
 </header>
 
+<nav>
+  <a href="/" class="active">&#x1F50D; Review Tool</a>
+  <a href="/guidelines-page">&#x1F4D6; Guidelines</a>
+</nav>
+
 <main>
 
   <!-- Upload Card -->
@@ -255,9 +278,14 @@
     <div class="meta-row" id="meta-row"></div>
     <div id="decision-badge"></div>
     <div class="review-text" id="review-text"></div>
-    <button class="btn btn-download" id="download-btn" onclick="downloadReport()">
-      &#x1F4E5; Download DOCX Report
-    </button>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:12px;">
+      <button class="btn btn-download" id="download-btn" onclick="downloadReport()">
+        &#x1F4E5; Download PDF Report
+      </button>
+      <button class="btn btn-download" id="cloud-btn" onclick="downloadFromCloud()" style="display:none;background:#0d7f46;">
+        &#x2601;&#xFE0F; Download from Cloud Storage
+      </button>
+    </div>
   </div>
 
 </main>
@@ -337,7 +365,8 @@
 
     // UI: show progress, hide results
     document.getElementById("progress-section").style.display = "block";
-    document.getElementById("results-section").style.display = "none";
+    document.getElementById("results-section").style.display  = "none";
+    document.getElementById("cloud-btn").style.display        = "none";
     reviewBtn.disabled = true;
     reviewBtn.textContent = "⏳ Reviewing…";
 
@@ -345,40 +374,82 @@
     formData.append("file", file);
     if (journalName) formData.append("journal_name", journalName);
 
+    // Show a live preview box in the progress section
+    let liveBox = document.getElementById("live-preview");
+    if (!liveBox) {
+      liveBox = document.createElement("pre");
+      liveBox.id = "live-preview";
+      liveBox.style.cssText = "margin-top:12px;padding:12px;background:#f8fafd;border:1px solid #dce8f5;" +
+        "border-radius:6px;font-size:0.82rem;line-height:1.5;max-height:260px;overflow-y:auto;white-space:pre-wrap;color:#2a3a4a;";
+      document.getElementById("progress-section").appendChild(liveBox);
+    }
+    liveBox.textContent = "";
+
     try {
-      const resp = await fetch("/review", {
-        method: "POST",
-        body: formData,
-      });
-
-      const data = await resp.json();
-
+      const resp = await fetch("/review", { method: "POST", body: formData });
       if (!resp.ok) {
-        showError(data.error || "Unknown error from server.");
+        const err = await resp.json().catch(() => ({}));
+        showError(err.error || `Server error ${resp.status}`);
         return;
       }
 
-      currentReviewId = data.review_id;
+      const reader  = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let fullText = "";
 
-      // Populate results
-      const metaRow = document.getElementById("meta-row");
-      metaRow.innerHTML =
-        `<span><strong>Manuscript:</strong> ${escHtml(data.manuscript_title)}</span>` +
-        `<span><strong>Word count:</strong> ~${data.word_count.toLocaleString()}</span>`;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
 
-      const badgeEl = document.getElementById("decision-badge");
-      badgeEl.innerHTML =
-        `<span class="decision-badge ${decisionClass(data.decision)}">
-           Decision: ${escHtml(data.decision)}
-         </span>`;
+        const lines = buffer.split("\n");
+        buffer = lines.pop(); // keep incomplete line
 
-      const reviewEl = document.getElementById("review-text");
-      reviewEl.innerHTML = renderReviewText(escHtml(data.review_text));
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          let evt;
+          try { evt = JSON.parse(line.slice(6)); } catch { continue; }
 
-      document.getElementById("results-section").style.display = "block";
+          if (evt.type === "chunk") {
+            fullText += evt.text;
+            liveBox.textContent = fullText;
+            liveBox.scrollTop   = liveBox.scrollHeight;
 
-      // Scroll to results
-      document.getElementById("results-section").scrollIntoView({ behavior: "smooth" });
+            // Show results card early with streaming content
+            if (fullText.length > 200 && document.getElementById("results-section").style.display === "none") {
+              document.getElementById("results-section").style.display = "block";
+              document.getElementById("results-section").scrollIntoView({ behavior: "smooth" });
+            }
+            document.getElementById("review-text").innerHTML = renderReviewText(escHtml(fullText));
+
+          } else if (evt.type === "done") {
+            currentReviewId = evt.review_id;
+
+            document.getElementById("meta-row").innerHTML =
+              `<span><strong>Manuscript:</strong> ${escHtml(evt.manuscript_title)}</span>` +
+              `<span><strong>Word count:</strong> ~${(evt.word_count||0).toLocaleString()}</span>`;
+
+            document.getElementById("decision-badge").innerHTML =
+              `<span class="decision-badge ${decisionClass(evt.decision)}">
+                 Decision: ${escHtml(evt.decision)}
+               </span>`;
+
+            document.getElementById("results-section").style.display = "block";
+            document.getElementById("results-section").scrollIntoView({ behavior: "smooth" });
+
+            // Show cloud download button if GCS is enabled
+            if (evt.gcs_url) {
+              const cloudBtn = document.getElementById("cloud-btn");
+              cloudBtn.style.display = "inline-block";
+              cloudBtn._gcsUrl = evt.gcs_url;
+            }
+
+          } else if (evt.type === "error") {
+            showError(evt.error || "Review failed.");
+          }
+        }
+      }
 
     } catch (err) {
       showError("Network error: " + err.message);
@@ -392,6 +463,11 @@
   function downloadReport() {
     if (!currentReviewId) { alert("No review available to download."); return; }
     window.location.href = "/download/" + currentReviewId;
+  }
+
+  function downloadFromCloud() {
+    const btn = document.getElementById("cloud-btn");
+    if (btn._gcsUrl) window.open(btn._gcsUrl, "_blank");
   }
 
   function escHtml(str) {

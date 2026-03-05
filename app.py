@@ -1,54 +1,117 @@
 """
 app.py
 Flask web application for AI-assisted journal article peer review.
-Deploy on GCP Cloud Run.
+Deployable on GCP Cloud Run.
+
+Routes
+------
+GET  /                          Serve the web UI (index.html)
+GET  /guidelines-page           Serve the Guidelines page (guidelines.html)
+GET  /health                    Health check (used by Cloud Run)
+POST /review                    Stream 8-stage AI peer review via SSE (text/event-stream)
+GET  /download/<review_id>      Download the PDF review report
+GET  /guidelines/full           Return complete guidelines data (for UI)
+GET  /guidelines/metadata       Return current guidelines version/metadata
+GET  /guidelines/journals       Return list of known journals
+GET  /guidelines/changelog      Return guidelines changelog
+POST /guidelines/validate       Validate the current guidelines YAML
+POST /admin/reload-guidelines   Hot-reload guidelines without restart
+
+Environment variables
+---------------------
+ANTHROPIC_API_KEY  : required — Anthropic API key
+GCS_BUCKET         : optional — GCS bucket name for persistent PDF storage
 """
 
 import os
 import uuid
+import json
 import logging
-from flask import Flask, request, jsonify, send_file, render_template_string
 import io
 
-from review_agent import run_review
+from flask import Flask, request, jsonify, send_file, Response, stream_with_context
+
+from review_agent import run_review, extract_text, stream_review
 from report_generator import generate_report
+from gcs_uploader import upload_report
+from guidelines.guidelines_loader import (
+    get_metadata,
+    get_changelog,
+    get_journal_list,
+    get_full_guidelines,
+    validate_guidelines,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB max upload
+app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB
 
 ALLOWED_EXTENSIONS = {"pdf", "docx", "txt"}
+
+# In-memory review store (keyed by review_id).
+# For multi-instance Cloud Run, replace with Cloud Storage or Firestore.
+_review_store: dict[str, dict] = {}
 
 
 def allowed_file(filename: str) -> bool:
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
-# In-memory store for review results (keyed by review_id).
-# For production, replace with Cloud Storage or Redis.
-_review_store: dict[str, dict] = {}
-
+# ---------------------------------------------------------------------------
+# UI
+# ---------------------------------------------------------------------------
 
 @app.route("/", methods=["GET"])
 def index():
-    with open(os.path.join(os.path.dirname(__file__), "index.html"), "r") as f:
+    html_path = os.path.join(os.path.dirname(__file__), "index.html")
+    with open(html_path, "r", encoding="utf-8") as f:
         return f.read()
 
+
+@app.route("/guidelines-page", methods=["GET"])
+def guidelines_page():
+    html_path = os.path.join(os.path.dirname(__file__), "guidelines.html")
+    with open(html_path, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+@app.route("/guidelines/full", methods=["GET"])
+def guidelines_full():
+    """Return the complete structured guidelines for UI rendering."""
+    try:
+        return jsonify(get_full_guidelines()), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ---------------------------------------------------------------------------
+# Health
+# ---------------------------------------------------------------------------
 
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok"}), 200
 
 
+# ---------------------------------------------------------------------------
+# Core review endpoint
+# ---------------------------------------------------------------------------
+
 @app.route("/review", methods=["POST"])
 def review():
     """
-    Accepts a multipart/form-data POST with:
-      - file: the manuscript file (PDF, DOCX, or TXT)
-      - journal_name: (optional) name of the target journal
-    Returns JSON with review_id, decision, and full review_text.
+    Accept a manuscript file and stream the 8-stage AI peer review via SSE.
+
+    Form fields:
+      file         : required — PDF, DOCX, or TXT
+      journal_name : optional — target journal (e.g. NJCM, BMJ, PLOS ONE)
+
+    Response: text/event-stream with JSON lines:
+      data: {"type":"chunk","text":"..."}
+      data: {"type":"done","review_id":"...","manuscript_title":"...","decision":"...","word_count":N}
+      data: {"type":"error","error":"..."}
     """
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded. Please attach your manuscript."}), 400
@@ -56,75 +119,169 @@ def review():
     file = request.files["file"]
     if file.filename == "":
         return jsonify({"error": "No file selected."}), 400
-
     if not allowed_file(file.filename):
-        return jsonify(
-            {"error": "Unsupported file type. Please upload a PDF, DOCX, or TXT file."}
-        ), 400
+        return jsonify({
+            "error": "Unsupported file type. Please upload PDF, DOCX, or TXT."
+        }), 400
 
     journal_name = request.form.get("journal_name", "").strip()
+    file_bytes = file.read()
+    filename = file.filename
+    logger.info(f"Received '{filename}' ({len(file_bytes):,} bytes) journal='{journal_name}'")
 
-    try:
-        file_bytes = file.read()
-        logger.info(f"Processing manuscript: {file.filename} ({len(file_bytes)} bytes)")
-
-        result = run_review(file_bytes, file.filename, journal_name=journal_name)
-
+    def generate():
         review_id = str(uuid.uuid4())
-        _review_store[review_id] = result
+        for event in stream_review(file_bytes, filename, journal_name=journal_name):
+            if event["type"] == "done":
+                result = event["result"]
+                _review_store[review_id] = result
 
-        return jsonify(
-            {
-                "review_id": review_id,
-                "manuscript_title": result["manuscript_title"],
-                "decision": result["decision"],
-                "word_count": result["word_count"],
-                "review_text": result["review_text"],
-            }
-        ), 200
+                # Generate PDF and upload to GCS for persistent offline access
+                gcs_url = None
+                try:
+                    pdf_bytes = generate_report(result)
+                    gcs_url = upload_report(review_id, pdf_bytes, result["manuscript_title"])
+                except Exception as exc:
+                    logger.warning(f"PDF/GCS step failed (non-fatal): {exc}")
 
-    except ValueError as e:
-        logger.warning(f"Validation error: {e}")
-        return jsonify({"error": str(e)}), 422
-    except RuntimeError as e:
-        logger.error(f"Runtime error: {e}")
-        return jsonify({"error": str(e)}), 500
-    except Exception as e:
-        logger.exception("Unexpected error during review")
-        return jsonify({"error": f"An unexpected error occurred: {str(e)}"}), 500
+                payload = {
+                    "type": "done",
+                    "review_id": review_id,
+                    "manuscript_title": result["manuscript_title"],
+                    "decision": result["decision"],
+                    "word_count": result["word_count"],
+                }
+                if gcs_url:
+                    payload["gcs_url"] = gcs_url
+                yield f"data: {json.dumps(payload)}\n\n"
+            else:
+                yield f"data: {json.dumps(event)}\n\n"
 
+    return Response(
+        stream_with_context(generate()),
+        content_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Report download
+# ---------------------------------------------------------------------------
 
 @app.route("/download/<review_id>", methods=["GET"])
 def download_report(review_id: str):
-    """
-    Download the DOCX report for a completed review.
-    """
+    """Download the PDF peer review report for a completed review."""
     result = _review_store.get(review_id)
     if not result:
-        return jsonify({"error": "Review not found. Please run the review again."}), 404
+        return jsonify({
+            "error": "Review not found or expired. Please run the review again."
+        }), 404
 
     try:
-        docx_bytes = generate_report(result)
+        pdf_bytes = generate_report(result)
         safe_title = (
             result.get("manuscript_title", "review")[:40]
             .replace(" ", "_")
             .replace("/", "-")
             .replace("\\", "-")
         )
-        filename = f"PeerReview_{safe_title}.docx"
-
+        download_name = f"PeerReview_{safe_title}.pdf"
         return send_file(
-            io.BytesIO(docx_bytes),
-            mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            io.BytesIO(pdf_bytes),
+            mimetype="application/pdf",
             as_attachment=True,
-            download_name=filename,
+            download_name=download_name,
         )
     except Exception as e:
-        logger.exception("Failed to generate report")
-        return jsonify({"error": f"Report generation failed: {str(e)}"}), 500
+        logger.exception("Failed to generate PDF report")
+        return jsonify({"error": f"Report generation failed: {e}"}), 500
 
+
+# ---------------------------------------------------------------------------
+# Guidelines admin endpoints (no auth needed for read; add auth for write)
+# ---------------------------------------------------------------------------
+
+@app.route("/guidelines/metadata", methods=["GET"])
+def guidelines_metadata():
+    """Return the current version and metadata of the review guidelines."""
+    try:
+        return jsonify(get_metadata()), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/guidelines/changelog", methods=["GET"])
+def guidelines_changelog():
+    """Return the guidelines changelog."""
+    try:
+        return jsonify({"changelog": get_changelog()}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/guidelines/journals", methods=["GET"])
+def guidelines_journals():
+    """Return the list of journals with specific override configurations."""
+    try:
+        return jsonify({"journals": get_journal_list()}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/guidelines/validate", methods=["POST"])
+def guidelines_validate():
+    """Validate the current review_guidelines.yaml structure."""
+    try:
+        result = validate_guidelines()
+        status = 200 if result["valid"] else 422
+        return jsonify(result), status
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/admin/reload-guidelines", methods=["POST"])
+def reload_guidelines():
+    """
+    Hot-reload the guidelines YAML without restarting the app.
+    Validates first; rejects if the YAML is invalid.
+    (Add authentication middleware before using in production.)
+    """
+    result = validate_guidelines()
+    if not result["valid"]:
+        return jsonify({
+            "reloaded": False,
+            "errors": result.get("errors", [])
+        }), 422
+    return jsonify({
+        "reloaded": True,
+        "message": "Guidelines will be applied to the next review request.",
+        "version": result.get("version"),
+    }), 200
+
+
+# ---------------------------------------------------------------------------
+# Error handlers
+# ---------------------------------------------------------------------------
+
+@app.errorhandler(413)
+def request_too_large(e):
+    return jsonify({"error": "File is too large. Maximum allowed size is 50 MB."}), 413
+
+
+@app.errorhandler(404)
+def not_found(e):
+    return jsonify({"error": "Endpoint not found."}), 404
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     debug = os.environ.get("FLASK_DEBUG", "false").lower() == "true"
+    logger.info(f"Starting server on port {port} (debug={debug})")
     app.run(host="0.0.0.0", port=port, debug=debug)
