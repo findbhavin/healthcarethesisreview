@@ -18,7 +18,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app.py .
 COPY review_agent.py .
 COPY report_generator.py .
+COPY gcs_uploader.py .
 COPY index.html .
+COPY guidelines.html .
+
+# Copy guidelines package (required by review_agent and report_generator)
+COPY guidelines/ ./guidelines/
 
 # Copy reference documents (checklists, guidelines)
 COPY docs/ ./docs/
