@@ -5,6 +5,7 @@ Uses reportlab (pure-Python, no system dependencies — works on Cloud Run).
 
 The PDF includes:
   • Manuscript info table (title, file, word count, date, decision)
+  • Weighted Review Score (WRS) scorecard with per-stage bar charts
   • 8 stage review sections with severity colour-coding
   • Guidelines Applied appendix (version, stage list, journal requirements)
 """
@@ -21,9 +22,11 @@ from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
     HRFlowable, KeepTogether,
 )
-from reportlab.lib.enums import TA_CENTER, TA_LEFT
+from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
+from reportlab.graphics.shapes import Drawing, Rect, String
+from reportlab.graphics import renderPDF
 
-from guidelines.guidelines_loader import get_full_guidelines
+from guidelines.guidelines_loader import get_full_guidelines, get_stage_weights
 
 # ── Colours ────────────────────────────────────────────────────────────────
 C_BLUE       = colors.HexColor("#1A5C96")
@@ -38,6 +41,11 @@ C_AMBER      = colors.HexColor("#B86E00")
 C_GREY       = colors.HexColor("#555555")
 C_WHITE      = colors.white
 C_DARK       = colors.HexColor("#1A1A2E")
+
+C_SCORE_HIGH  = colors.HexColor("#006600")   # ≥ 8/10
+C_SCORE_MED   = colors.HexColor("#B86E00")   # 5–7/10
+C_SCORE_LOW   = colors.HexColor("#CC0000")   # < 5/10
+C_SCORE_BG    = colors.HexColor("#E8F0E8")   # bar background
 
 STAGE_HEADERS = ["STAGE 1","STAGE 2","STAGE 3","STAGE 4","STAGE 5","STAGE 6","STAGE 7","STAGE 8"]
 
@@ -93,6 +101,132 @@ def _severity_color(text: str):
 def _esc(text: str) -> str:
     """Escape special XML chars for Paragraph content."""
     return (text or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _score_color(score: int):
+    if score >= 8:
+        return C_SCORE_HIGH
+    if score >= 5:
+        return C_SCORE_MED
+    return C_SCORE_LOW
+
+
+def _build_score_bar(score: int, max_score: int = 10, bar_width: float = 120, height: float = 10) -> Drawing:
+    """Return a small horizontal bar chart Drawing for a single stage score."""
+    d = Drawing(bar_width, height)
+    # Background bar
+    d.add(Rect(0, 0, bar_width, height, fillColor=C_SCORE_BG, strokeColor=None))
+    # Score bar
+    filled = (score / max_score) * bar_width if max_score else 0
+    d.add(Rect(0, 0, filled, height, fillColor=_score_color(score), strokeColor=None))
+    return d
+
+
+def _build_scorecard(review_result: dict, styles) -> list:
+    """
+    Build the Weighted Review Score section flowables.
+    Returns a list of reportlab Flowable objects.
+    """
+    stage_scores: dict = review_result.get("stage_scores") or {}
+    weighted_score = review_result.get("weighted_score")
+    wrs_parts = review_result.get("wrs_parts", "")
+
+    if not stage_scores:
+        return []
+
+    weights = get_stage_weights()
+
+    h2_style = ParagraphStyle(
+        "ScoreH2", parent=styles["Heading2"],
+        textColor=C_BLUE, fontSize=12, spaceBefore=14, spaceAfter=6,
+    )
+    label_style = ParagraphStyle("ScLbl", parent=styles["Normal"], fontSize=9, fontName="Helvetica-Bold")
+    small_style  = ParagraphStyle("ScSml", parent=styles["Normal"], fontSize=8, textColor=C_GREY)
+    right_style  = ParagraphStyle("ScRt",  parent=styles["Normal"], fontSize=9, alignment=TA_RIGHT)
+
+    story = []
+    story.append(Paragraph("Weighted Review Score (WRS)", h2_style))
+    story.append(HRFlowable(width="100%", thickness=0.8, color=C_BLUE_LIGHT, spaceAfter=8))
+
+    # WRS summary badge
+    if weighted_score is not None:
+        wrs_val = float(weighted_score)
+        wrs_color = C_SCORE_HIGH if wrs_val >= 75 else (C_SCORE_MED if wrs_val >= 50 else C_SCORE_LOW)
+        wrs_hex = wrs_color.hexval()
+        wrs_para = Paragraph(
+            f'<b>Overall Weighted Review Score: <font color="{wrs_hex}">{wrs_val:.1f} / 100</font></b>',
+            ParagraphStyle("WRSBig", parent=styles["Normal"], fontSize=13, spaceBefore=4, spaceAfter=4),
+        )
+        story.append(wrs_para)
+        if wrs_parts:
+            story.append(Paragraph(f"Formula: {_esc(wrs_parts)} ÷ 10 = {wrs_val:.1f}", small_style))
+        story.append(Spacer(1, 8))
+
+    # Per-stage score table with mini bars
+    stage_short_names = {
+        1: "Initial Editorial Screening",
+        2: "Scope & Novelty",
+        3: "Methodology Review",
+        4: "Results & Data Integrity",
+        5: "Discussion & Conclusions",
+        6: "References",
+        7: "Ethical & Integrity",
+    }
+
+    bar_w = 100
+    bar_h = 9
+
+    table_data = [
+        [
+            Paragraph("<b>Stage</b>", label_style),
+            Paragraph("<b>Score</b>", label_style),
+            Paragraph("<b>Weight</b>", label_style),
+            Paragraph("<b>Contribution</b>", label_style),
+            Paragraph("<b>Visual</b>", label_style),
+        ]
+    ]
+
+    for stage_num in range(1, 8):
+        score = stage_scores.get(stage_num)
+        if score is None:
+            continue
+        weight = weights.get(stage_num, 0)
+        contribution = round(score * weight / 10, 1)
+        sc = _score_color(score)
+        sc_hex = sc.hexval()
+        bar = _build_score_bar(score, 10, bar_w, bar_h)
+        table_data.append([
+            Paragraph(f"<b>S{stage_num}:</b> {_esc(stage_short_names.get(stage_num, ''))}", small_style),
+            Paragraph(f'<font color="{sc_hex}"><b>{score}/10</b></font>', label_style),
+            Paragraph(f"{weight}%", small_style),
+            Paragraph(f"{contribution}", small_style),
+            bar,
+        ])
+
+    if len(table_data) > 1:
+        col_widths = [5.5*cm, 1.5*cm, 1.5*cm, 2*cm, bar_w + 4]
+        score_table = Table(table_data, colWidths=col_widths)
+        score_table.setStyle(TableStyle([
+            ("BACKGROUND",    (0, 0), (-1, 0), C_BLUE),
+            ("TEXTCOLOR",     (0, 0), (-1, 0), C_WHITE),
+            ("BACKGROUND",    (0, 1), (-1, -1), C_BLUE_BG),
+            ("ROWBACKGROUNDS",(0, 1), (-1, -1), [C_WHITE, C_BLUE_BG]),
+            ("GRID",          (0, 0), (-1, -1), 0.3, colors.HexColor("#B0C8E0")),
+            ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+            ("TOPPADDING",    (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ("LEFTPADDING",   (0, 0), (-1, -1), 6),
+            ("RIGHTPADDING",  (0, 0), (-1, -1), 6),
+        ]))
+        story.append(score_table)
+
+    story.append(Spacer(1, 8))
+    story.append(Paragraph(
+        "WRS = Σ(Stage Score × Stage Weight) ÷ 10  |  Weights: S1:8%, S2:12%, S3:25%, S4:20%, S5:15%, S6:7%, S7:13%",
+        small_style,
+    ))
+    story.append(Spacer(1, 12))
+    return story
 
 
 def generate_report(review_result: dict) -> bytes:
@@ -180,6 +314,10 @@ def generate_report(review_result: dict) -> bytes:
     ]))
     story.append(info_table)
     story.append(Spacer(1, 16))
+
+    # ── Weighted Review Score card ─────────────────────────────────────────
+    scorecard_items = _build_scorecard(review_result, styles)
+    story.extend(scorecard_items)
 
     # ── Stage sections ─────────────────────────────────────────────────────
     story.append(Paragraph("Review Findings", h2_style))
