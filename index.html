@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Peer Review System — Healthcare Journal</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: "Segoe UI", Arial, sans-serif;
+      background: #f0f4f8;
+      color: #1a1a2e;
+      min-height: 100vh;
+    }
+
+    /* ── Header ── */
+    header {
+      background: linear-gradient(135deg, #1a5c96 0%, #0d3d6e 100%);
+      color: #fff;
+      padding: 28px 32px 22px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+    }
+    header h1 { font-size: 1.75rem; font-weight: 700; letter-spacing: -0.3px; }
+    header p  { margin-top: 6px; font-size: 0.95rem; opacity: 0.85; }
+
+    /* ── Main layout ── */
+    main {
+      max-width: 960px;
+      margin: 36px auto;
+      padding: 0 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 28px;
+    }
+
+    /* ── Cards ── */
+    .card {
+      background: #fff;
+      border-radius: 10px;
+      padding: 28px 32px;
+      box-shadow: 0 1px 6px rgba(0,0,0,0.10);
+    }
+    .card h2 {
+      font-size: 1.1rem;
+      color: #1a5c96;
+      margin-bottom: 18px;
+      padding-bottom: 10px;
+      border-bottom: 2px solid #e4edf7;
+    }
+
+    /* ── Upload form ── */
+    .upload-zone {
+      border: 2px dashed #a0bcd8;
+      border-radius: 8px;
+      padding: 36px 20px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+      position: relative;
+    }
+    .upload-zone:hover, .upload-zone.drag-over {
+      border-color: #1a5c96;
+      background: #f0f7ff;
+    }
+    .upload-zone input[type="file"] {
+      position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%;
+    }
+    .upload-icon { font-size: 2.5rem; margin-bottom: 10px; }
+    .upload-zone p { color: #556; font-size: 0.95rem; }
+    .upload-zone span { color: #1a5c96; font-weight: 600; }
+    #file-name { margin-top: 8px; font-size: 0.88rem; color: #1a5c96; min-height: 18px; }
+
+    .form-row {
+      display: flex;
+      gap: 16px;
+      margin-top: 18px;
+      align-items: flex-end;
+    }
+    .form-group { flex: 1; }
+    label { display: block; font-size: 0.88rem; font-weight: 600; color: #445; margin-bottom: 6px; }
+    input[type="text"] {
+      width: 100%; padding: 9px 13px; border: 1.5px solid #c5d5e8; border-radius: 6px;
+      font-size: 0.95rem; color: #222; outline: none;
+      transition: border-color 0.2s;
+    }
+    input[type="text"]:focus { border-color: #1a5c96; }
+
+    .btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 10px 26px; border: none; border-radius: 6px;
+      font-size: 0.97rem; font-weight: 600; cursor: pointer;
+      transition: background 0.18s, transform 0.1s;
+      white-space: nowrap;
+    }
+    .btn:active { transform: scale(0.98); }
+    .btn-primary { background: #1a5c96; color: #fff; }
+    .btn-primary:hover { background: #154d80; }
+    .btn-primary:disabled { background: #8aabb8; cursor: not-allowed; transform: none; }
+    .btn-download { background: #0d7f46; color: #fff; margin-top: 16px; }
+    .btn-download:hover { background: #0a6639; }
+
+    /* ── Stages checklist (info) ── */
+    .stages-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 10px;
+    }
+    .stage-chip {
+      background: #f0f7ff;
+      border: 1px solid #c5d8f0;
+      border-radius: 6px;
+      padding: 8px 12px;
+      font-size: 0.84rem;
+      color: #1a5c96;
+      font-weight: 600;
+    }
+    .stage-chip span { display: block; font-weight: 400; color: #556; font-size: 0.80rem; margin-top: 2px; }
+
+    /* ── Progress ── */
+    #progress-section { display: none; }
+    .progress-bar-wrap {
+      background: #e4edf7; border-radius: 20px; height: 10px; overflow: hidden; margin-bottom: 10px;
+    }
+    .progress-bar {
+      height: 100%; border-radius: 20px;
+      background: linear-gradient(90deg, #1a5c96, #2e9ae8);
+      width: 0%; transition: width 0.4s ease;
+      animation: shimmer 1.5s infinite linear;
+      background-size: 200% 100%;
+    }
+    @keyframes shimmer {
+      0%   { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+    .progress-bar.indeterminate {
+      width: 100%;
+      background: linear-gradient(90deg, #e4edf7 25%, #1a5c96 50%, #e4edf7 75%);
+      background-size: 200% 100%;
+    }
+    #progress-status { font-size: 0.9rem; color: #556; text-align: center; }
+
+    /* ── Results ── */
+    #results-section { display: none; }
+
+    .decision-badge {
+      display: inline-block; padding: 6px 18px; border-radius: 20px;
+      font-weight: 700; font-size: 1rem; margin-bottom: 16px;
+    }
+    .decision-accept   { background: #d4edda; color: #155724; }
+    .decision-minor    { background: #fff3cd; color: #856404; }
+    .decision-major    { background: #ffe0cc; color: #7a3000; }
+    .decision-reject   { background: #f8d7da; color: #721c24; }
+    .decision-default  { background: #e4edf7; color: #1a5c96; }
+
+    .review-text {
+      background: #fafcff;
+      border: 1px solid #dce8f5;
+      border-radius: 8px;
+      padding: 20px 22px;
+      font-size: 0.91rem;
+      line-height: 1.75;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 600px;
+      overflow-y: auto;
+      font-family: "Segoe UI", Arial, sans-serif;
+    }
+
+    /* stage headings inside review text */
+    .review-text .stage-heading {
+      font-weight: 700; color: #1a5c96; font-size: 0.98rem;
+      border-bottom: 1px solid #dce8f5; margin: 12px 0 4px; padding-bottom: 2px;
+    }
+
+    .meta-row {
+      display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 14px; font-size: 0.88rem; color: #556;
+    }
+    .meta-row strong { color: #222; }
+
+    /* ── Error ── */
+    .error-box {
+      background: #fff0f0; border: 1px solid #f5c6cb; border-radius: 8px;
+      padding: 14px 18px; color: #721c24; font-size: 0.92rem; display: none;
+    }
+
+    /* ── Footer ── */
+    footer {
+      text-align: center; padding: 24px; font-size: 0.82rem; color: #889;
+      border-top: 1px solid #dde;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>&#x1F4CB; AI-Assisted Peer Review System</h1>
+  <p>Upload a journal manuscript for automated 8-stage editorial screening powered by Claude AI</p>
+</header>
+
+<main>
+
+  <!-- Upload Card -->
+  <div class="card">
+    <h2>Submit Manuscript for Review</h2>
+
+    <div class="upload-zone" id="upload-zone">
+      <input type="file" id="manuscript-file" accept=".pdf,.docx,.txt" />
+      <div class="upload-icon">&#x1F4C4;</div>
+      <p>Drag &amp; drop your manuscript here, or <span>click to browse</span></p>
+      <p style="margin-top:6px;font-size:0.82rem;color:#889;">Supported formats: PDF, DOCX, TXT &nbsp;|&nbsp; Max 50 MB</p>
+      <div id="file-name"></div>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label for="journal-name">Target Journal <span style="font-weight:400;color:#889">(optional)</span></label>
+        <input type="text" id="journal-name" placeholder="e.g. NJCM, BMJ, PLOS ONE" />
+      </div>
+      <button class="btn btn-primary" id="review-btn" onclick="submitReview()" disabled>
+        &#x1F50D; Run Review
+      </button>
+    </div>
+
+    <div class="error-box" id="error-box"></div>
+  </div>
+
+  <!-- Stages info card -->
+  <div class="card">
+    <h2>8-Stage Review Framework</h2>
+    <div class="stages-grid">
+      <div class="stage-chip">Stage 1 <span>Initial Editorial Screening</span></div>
+      <div class="stage-chip">Stage 2 <span>Scope &amp; Novelty Check</span></div>
+      <div class="stage-chip">Stage 3 <span>Methodology Review</span></div>
+      <div class="stage-chip">Stage 4 <span>Results &amp; Data Integrity</span></div>
+      <div class="stage-chip">Stage 5 <span>Discussion &amp; Conclusions</span></div>
+      <div class="stage-chip">Stage 6 <span>References</span></div>
+      <div class="stage-chip">Stage 7 <span>Ethical &amp; Integrity Checks</span></div>
+      <div class="stage-chip">Stage 8 <span>Overall Recommendation</span></div>
+    </div>
+  </div>
+
+  <!-- Progress -->
+  <div class="card" id="progress-section">
+    <h2>Review in Progress</h2>
+    <div class="progress-bar-wrap">
+      <div class="progress-bar indeterminate" id="progress-bar"></div>
+    </div>
+    <div id="progress-status">Analysing manuscript — this may take 60–90 seconds…</div>
+  </div>
+
+  <!-- Results -->
+  <div class="card" id="results-section">
+    <h2>Review Report</h2>
+    <div class="meta-row" id="meta-row"></div>
+    <div id="decision-badge"></div>
+    <div class="review-text" id="review-text"></div>
+    <button class="btn btn-download" id="download-btn" onclick="downloadReport()">
+      &#x1F4E5; Download DOCX Report
+    </button>
+  </div>
+
+</main>
+
+<footer>
+  AI-Assisted Peer Review &nbsp;|&nbsp; Powered by Claude AI &nbsp;|&nbsp;
+  This system supports editorial judgment — it does not replace human review.
+</footer>
+
+<script>
+  let currentReviewId = null;
+
+  // File selection
+  const fileInput = document.getElementById("manuscript-file");
+  const uploadZone = document.getElementById("upload-zone");
+  const reviewBtn  = document.getElementById("review-btn");
+  const fileNameEl = document.getElementById("file-name");
+
+  fileInput.addEventListener("change", () => {
+    if (fileInput.files.length > 0) {
+      fileNameEl.textContent = "Selected: " + fileInput.files[0].name;
+      reviewBtn.disabled = false;
+    } else {
+      fileNameEl.textContent = "";
+      reviewBtn.disabled = true;
+    }
+  });
+
+  // Drag & drop
+  uploadZone.addEventListener("dragover", e => { e.preventDefault(); uploadZone.classList.add("drag-over"); });
+  uploadZone.addEventListener("dragleave", () => uploadZone.classList.remove("drag-over"));
+  uploadZone.addEventListener("drop", e => {
+    e.preventDefault();
+    uploadZone.classList.remove("drag-over");
+    if (e.dataTransfer.files.length > 0) {
+      fileInput.files = e.dataTransfer.files;
+      fileInput.dispatchEvent(new Event("change"));
+    }
+  });
+
+  function showError(msg) {
+    const box = document.getElementById("error-box");
+    box.textContent = "Error: " + msg;
+    box.style.display = "block";
+  }
+  function clearError() {
+    const box = document.getElementById("error-box");
+    box.style.display = "none";
+    box.textContent = "";
+  }
+
+  function decisionClass(decision) {
+    const d = (decision || "").toLowerCase();
+    if (d.includes("accept as is") || d === "accept") return "decision-accept";
+    if (d.includes("minor"))  return "decision-minor";
+    if (d.includes("major"))  return "decision-major";
+    if (d.includes("reject")) return "decision-reject";
+    return "decision-default";
+  }
+
+  function renderReviewText(text) {
+    // Highlight STAGE headers
+    return text.replace(
+      /(STAGE\s+\d+[^:\n]*)/g,
+      '<span class="stage-heading">$1</span>'
+    );
+  }
+
+  async function submitReview() {
+    clearError();
+    currentReviewId = null;
+
+    const file = fileInput.files[0];
+    if (!file) { showError("Please select a file first."); return; }
+
+    const journalName = document.getElementById("journal-name").value.trim();
+
+    // UI: show progress, hide results
+    document.getElementById("progress-section").style.display = "block";
+    document.getElementById("results-section").style.display = "none";
+    reviewBtn.disabled = true;
+    reviewBtn.textContent = "⏳ Reviewing…";
+
+    const formData = new FormData();
+    formData.append("file", file);
+    if (journalName) formData.append("journal_name", journalName);
+
+    try {
+      const resp = await fetch("/review", {
+        method: "POST",
+        body: formData,
+      });
+
+      const data = await resp.json();
+
+      if (!resp.ok) {
+        showError(data.error || "Unknown error from server.");
+        return;
+      }
+
+      currentReviewId = data.review_id;
+
+      // Populate results
+      const metaRow = document.getElementById("meta-row");
+      metaRow.innerHTML =
+        `<span><strong>Manuscript:</strong> ${escHtml(data.manuscript_title)}</span>` +
+        `<span><strong>Word count:</strong> ~${data.word_count.toLocaleString()}</span>`;
+
+      const badgeEl = document.getElementById("decision-badge");
+      badgeEl.innerHTML =
+        `<span class="decision-badge ${decisionClass(data.decision)}">
+           Decision: ${escHtml(data.decision)}
+         </span>`;
+
+      const reviewEl = document.getElementById("review-text");
+      reviewEl.innerHTML = renderReviewText(escHtml(data.review_text));
+
+      document.getElementById("results-section").style.display = "block";
+
+      // Scroll to results
+      document.getElementById("results-section").scrollIntoView({ behavior: "smooth" });
+
+    } catch (err) {
+      showError("Network error: " + err.message);
+    } finally {
+      document.getElementById("progress-section").style.display = "none";
+      reviewBtn.disabled = false;
+      reviewBtn.innerHTML = "&#x1F50D; Run Review";
+    }
+  }
+
+  function downloadReport() {
+    if (!currentReviewId) { alert("No review available to download."); return; }
+    window.location.href = "/download/" + currentReviewId;
+  }
+
+  function escHtml(str) {
+    return (str || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/\n/g, "&#10;");
+  }
+</script>
+
+</body>
+</html>
