@@ -71,6 +71,20 @@ def extract_text(file_bytes: bytes, filename: str) -> str:
         )
 
 
+# Cap very long manuscripts to keep token usage and latency reasonable.
+_MAX_MANUSCRIPT_CHARS = 80_000
+
+
+def _truncate(text: str) -> str:
+    if len(text) <= _MAX_MANUSCRIPT_CHARS:
+        return text
+    logger.warning(
+        f"Manuscript is {len(text):,} chars — truncating to {_MAX_MANUSCRIPT_CHARS:,} "
+        "to reduce latency. Consider splitting very long documents."
+    )
+    return text[:_MAX_MANUSCRIPT_CHARS] + "\n\n[NOTE: Manuscript truncated at 80,000 characters for processing.]"
+
+
 # ---------------------------------------------------------------------------
 # Review Runner
 # ---------------------------------------------------------------------------
@@ -102,6 +116,7 @@ def run_review(file_bytes: bytes, filename: str, journal_name: str = "") -> dict
             "Please ensure the file is not encrypted or image-only."
         )
 
+    manuscript_text = _truncate(manuscript_text)
     word_count = len(manuscript_text.split())
     logger.info(
         f"Extracted {word_count} words from '{filename}' "
@@ -127,7 +142,7 @@ def run_review(file_bytes: bytes, filename: str, journal_name: str = "") -> dict
 
     logger.info("Sending manuscript to Claude API for review...")
     message = client.messages.create(
-        model="claude-opus-4-6",
+        model="claude-sonnet-4-6",
         max_tokens=8192,
         system=system_prompt,
         messages=[{"role": "user", "content": user_message}],
@@ -160,3 +175,84 @@ def run_review(file_bytes: bytes, filename: str, journal_name: str = "") -> dict
         "filename": filename,
         "journal_name": journal_name,
     }
+
+
+def stream_review(file_bytes: bytes, filename: str, journal_name: str = ""):
+    """
+    Streaming version of run_review. Yields dicts for SSE:
+      {"type": "chunk", "text": "..."}          — incremental text
+      {"type": "done",  "result": {...}}         — final result dict
+      {"type": "error", "error": "..."}          — on failure
+
+    The caller (Flask route) is responsible for JSON-encoding each dict.
+    """
+    try:
+        manuscript_text = extract_text(file_bytes, filename)
+        if not manuscript_text.strip():
+            yield {"type": "error", "error": "Could not extract text from the file. Ensure it is not encrypted or image-only."}
+            return
+
+        manuscript_text = _truncate(manuscript_text)
+        word_count = len(manuscript_text.split())
+        logger.info(
+            f"[stream] Extracted {word_count} words from '{filename}' "
+            f"(journal='{journal_name or 'not specified'}')"
+        )
+
+        system_prompt = build_system_prompt(journal_name=journal_name)
+        user_message = (
+            f"Please conduct a full peer review of the following manuscript:\n\n"
+            f"--- MANUSCRIPT BEGIN ---\n{manuscript_text}\n--- MANUSCRIPT END ---"
+        )
+
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        if not api_key:
+            yield {"type": "error", "error": "ANTHROPIC_API_KEY is not configured."}
+            return
+
+        client = anthropic.Anthropic(api_key=api_key)
+        full_text_parts = []
+
+        logger.info("[stream] Streaming review from Claude API...")
+        with client.messages.stream(
+            model="claude-sonnet-4-6",
+            max_tokens=8192,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_message}],
+        ) as stream:
+            for text_chunk in stream.text_stream:
+                full_text_parts.append(text_chunk)
+                yield {"type": "chunk", "text": text_chunk}
+
+        review_text = "".join(full_text_parts)
+        logger.info("[stream] Review stream completed.")
+
+        # Parse decision
+        decision = "See report"
+        for line in review_text.splitlines():
+            if line.strip().lower().startswith("decision:"):
+                decision = line.split(":", 1)[1].strip()
+                break
+
+        # Parse title
+        manuscript_title = filename
+        for line in review_text.splitlines():
+            if "manuscript title:" in line.lower():
+                candidate = line.split(":", 1)[1].strip()
+                if candidate and candidate not in ("Not provided", "[Not provided]", "—"):
+                    manuscript_title = candidate
+                break
+
+        result = {
+            "manuscript_title": manuscript_title,
+            "review_text": review_text,
+            "word_count": word_count,
+            "decision": decision,
+            "filename": filename,
+            "journal_name": journal_name,
+        }
+        yield {"type": "done", "result": result}
+
+    except Exception as exc:
+        logger.exception("[stream] Error during streaming review")
+        yield {"type": "error", "error": str(exc)}

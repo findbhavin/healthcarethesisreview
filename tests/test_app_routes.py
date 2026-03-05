@@ -14,7 +14,7 @@ from unittest.mock import patch, MagicMock
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import app as flask_app_module
-from app import app
+from app import app, _review_store
 
 INPUTS_DIR = os.path.join(os.path.dirname(__file__), "..", "inputs")
 SAMPLE_DOCX = os.path.join(
@@ -68,14 +68,38 @@ END OF REVIEW REPORT
 ---
 """
 
+SAMPLE_REVIEW_RESULT = {
+    "manuscript_title": "Test Osteoporosis Study",
+    "filename": "test.docx",
+    "word_count": 120,
+    "decision": "Major revision",
+    "journal_name": "NJCM",
+    "review_text": MOCK_REVIEW_TEXT,
+}
 
-def _make_mock_anthropic_response(text: str):
-    """Create a minimal mock that matches the anthropic client response structure."""
-    mock_content = MagicMock()
-    mock_content.text = text
-    mock_response = MagicMock()
-    mock_response.content = [mock_content]
-    return mock_response
+
+def _parse_sse(response_data: bytes) -> list[dict]:
+    """Parse SSE response body into a list of event dicts."""
+    events = []
+    for line in response_data.decode("utf-8", errors="replace").split("\n"):
+        if line.startswith("data: "):
+            try:
+                events.append(json.loads(line[6:]))
+            except json.JSONDecodeError:
+                pass
+    return events
+
+
+def _make_stream_mock(text: str):
+    """
+    Create a mock for client.messages.stream() that yields text as a
+    context manager with a .text_stream attribute.
+    """
+    mock_stream = MagicMock()
+    mock_stream.text_stream = iter([text])
+    mock_stream.__enter__ = MagicMock(return_value=mock_stream)
+    mock_stream.__exit__ = MagicMock(return_value=False)
+    return mock_stream
 
 
 class TestHealthRoute(unittest.TestCase):
@@ -174,13 +198,11 @@ class TestReviewRoute(unittest.TestCase):
         self.assertEqual(resp.status_code, 400)
 
     @patch("review_agent.anthropic.Anthropic")
-    def test_review_docx_returns_result(self, mock_anthropic_cls):
-        """Full review with a real DOCX but mocked Claude API."""
+    def test_review_docx_returns_sse_stream(self, mock_anthropic_cls):
+        """Full review with a real DOCX but mocked Claude API — checks SSE events."""
         mock_client = MagicMock()
         mock_anthropic_cls.return_value = mock_client
-        mock_client.messages.create.return_value = _make_mock_anthropic_response(
-            MOCK_REVIEW_TEXT
-        )
+        mock_client.messages.stream.return_value = _make_stream_mock(MOCK_REVIEW_TEXT)
 
         with open(SAMPLE_DOCX, "rb") as f:
             docx_bytes = f.read()
@@ -196,21 +218,23 @@ class TestReviewRoute(unittest.TestCase):
             )
 
         self.assertEqual(resp.status_code, 200, resp.data)
-        data = json.loads(resp.data)
-        self.assertIn("review_id", data)
-        self.assertIn("decision", data)
-        self.assertIn("review_text", data)
-        self.assertIn("word_count", data)
-        self.assertEqual(data["decision"], "Major revision")
+        self.assertIn("text/event-stream", resp.content_type)
+
+        events = _parse_sse(resp.data)
+        done_events = [e for e in events if e.get("type") == "done"]
+        self.assertEqual(len(done_events), 1)
+        done = done_events[0]
+        self.assertIn("review_id", done)
+        self.assertIn("decision", done)
+        self.assertIn("word_count", done)
+        self.assertEqual(done["decision"], "Major revision")
 
     @patch("review_agent.anthropic.Anthropic")
     def test_review_txt_content(self, mock_anthropic_cls):
-        """Review with a plain-text file."""
+        """Review with a plain-text file — checks SSE done event."""
         mock_client = MagicMock()
         mock_anthropic_cls.return_value = mock_client
-        mock_client.messages.create.return_value = _make_mock_anthropic_response(
-            MOCK_REVIEW_TEXT
-        )
+        mock_client.messages.stream.return_value = _make_stream_mock(MOCK_REVIEW_TEXT)
 
         txt_content = b"Title: Sample Article\n\nAbstract: A study of X in Y population."
 
@@ -222,11 +246,13 @@ class TestReviewRoute(unittest.TestCase):
             )
 
         self.assertEqual(resp.status_code, 200)
-        data = json.loads(resp.data)
-        self.assertIn("review_id", data)
+        events = _parse_sse(resp.data)
+        done_events = [e for e in events if e.get("type") == "done"]
+        self.assertEqual(len(done_events), 1)
+        self.assertIn("review_id", done_events[0])
 
-    def test_review_missing_api_key_returns_500(self):
-        """Without ANTHROPIC_API_KEY, the server should return 500."""
+    def test_review_missing_api_key_returns_error_event(self):
+        """Without ANTHROPIC_API_KEY, an SSE error event should be returned."""
         with open(SAMPLE_DOCX, "rb") as f:
             docx_bytes = f.read()
 
@@ -238,9 +264,11 @@ class TestReviewRoute(unittest.TestCase):
                 content_type="multipart/form-data",
             )
 
-        self.assertEqual(resp.status_code, 500)
-        data = json.loads(resp.data)
-        self.assertIn("ANTHROPIC_API_KEY", data["error"])
+        self.assertEqual(resp.status_code, 200)  # SSE always starts 200
+        events = _parse_sse(resp.data)
+        error_events = [e for e in events if e.get("type") == "error"]
+        self.assertEqual(len(error_events), 1)
+        self.assertIn("ANTHROPIC_API_KEY", error_events[0]["error"])
 
 
 class TestDownloadRoute(unittest.TestCase):
@@ -253,34 +281,18 @@ class TestDownloadRoute(unittest.TestCase):
         resp = self.client.get("/download/nonexistent-review-id")
         self.assertEqual(resp.status_code, 404)
 
-    @patch("review_agent.anthropic.Anthropic")
-    def test_download_after_review_returns_docx(self, mock_anthropic_cls):
-        """End-to-end: review then download."""
-        mock_client = MagicMock()
-        mock_anthropic_cls.return_value = mock_client
-        mock_client.messages.create.return_value = _make_mock_anthropic_response(
-            MOCK_REVIEW_TEXT
-        )
-
-        with open(SAMPLE_DOCX, "rb") as f:
-            docx_bytes = f.read()
-
-        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test-key"}):
-            review_resp = self.client.post(
-                "/review",
-                data={"file": (io.BytesIO(docx_bytes), "test.docx")},
-                content_type="multipart/form-data",
-            )
-        review_id = json.loads(review_resp.data)["review_id"]
+    def test_download_after_seeding_store_returns_pdf(self):
+        """Seed the review store directly and verify PDF download."""
+        review_id = "test-direct-seed-id"
+        _review_store[review_id] = SAMPLE_REVIEW_RESULT
 
         download_resp = self.client.get(f"/download/{review_id}")
         self.assertEqual(download_resp.status_code, 200)
-        self.assertIn(
-            "openxmlformats-officedocument",
-            download_resp.content_type,
-        )
-        # Should be a valid DOCX (starts with PK zip magic bytes)
-        self.assertTrue(download_resp.data[:2] == b"PK")
+        self.assertIn("pdf", download_resp.content_type)
+        # PDF magic bytes
+        self.assertTrue(download_resp.data.startswith(b"%PDF"))
+
+        del _review_store[review_id]
 
 
 class TestErrorHandlers(unittest.TestCase):

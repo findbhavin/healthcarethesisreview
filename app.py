@@ -8,25 +8,32 @@ Routes
 GET  /                          Serve the web UI (index.html)
 GET  /guidelines-page           Serve the Guidelines page (guidelines.html)
 GET  /health                    Health check (used by Cloud Run)
-POST /review                    Submit a manuscript for AI peer review
-GET  /download/<review_id>      Download the DOCX report
+POST /review                    Stream 8-stage AI peer review via SSE (text/event-stream)
+GET  /download/<review_id>      Download the PDF review report
 GET  /guidelines/full           Return complete guidelines data (for UI)
 GET  /guidelines/metadata       Return current guidelines version/metadata
 GET  /guidelines/journals       Return list of known journals
 GET  /guidelines/changelog      Return guidelines changelog
 POST /guidelines/validate       Validate the current guidelines YAML
 POST /admin/reload-guidelines   Hot-reload guidelines without restart
+
+Environment variables
+---------------------
+ANTHROPIC_API_KEY  : required — Anthropic API key
+GCS_BUCKET         : optional — GCS bucket name for persistent PDF storage
 """
 
 import os
 import uuid
+import json
 import logging
 import io
 
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, Response, stream_with_context
 
-from review_agent import run_review, extract_text
+from review_agent import run_review, extract_text, stream_review
 from report_generator import generate_report
+from gcs_uploader import upload_report
 from guidelines.guidelines_loader import (
     get_metadata,
     get_changelog,
@@ -95,11 +102,16 @@ def health():
 @app.route("/review", methods=["POST"])
 def review():
     """
-    Accept a manuscript file and run the 8-stage AI peer review.
+    Accept a manuscript file and stream the 8-stage AI peer review via SSE.
 
     Form fields:
       file         : required — PDF, DOCX, or TXT
       journal_name : optional — target journal (e.g. NJCM, BMJ, PLOS ONE)
+
+    Response: text/event-stream with JSON lines:
+      data: {"type":"chunk","text":"..."}
+      data: {"type":"done","review_id":"...","manuscript_title":"...","decision":"...","word_count":N}
+      data: {"type":"error","error":"..."}
     """
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded. Please attach your manuscript."}), 400
@@ -113,33 +125,46 @@ def review():
         }), 400
 
     journal_name = request.form.get("journal_name", "").strip()
+    file_bytes = file.read()
+    filename = file.filename
+    logger.info(f"Received '{filename}' ({len(file_bytes):,} bytes) journal='{journal_name}'")
 
-    try:
-        file_bytes = file.read()
-        logger.info(f"Received '{file.filename}' ({len(file_bytes):,} bytes) journal='{journal_name}'")
-
-        result = run_review(file_bytes, file.filename, journal_name=journal_name)
-
+    def generate():
         review_id = str(uuid.uuid4())
-        _review_store[review_id] = result
+        for event in stream_review(file_bytes, filename, journal_name=journal_name):
+            if event["type"] == "done":
+                result = event["result"]
+                _review_store[review_id] = result
 
-        return jsonify({
-            "review_id":        review_id,
-            "manuscript_title": result["manuscript_title"],
-            "decision":         result["decision"],
-            "word_count":       result["word_count"],
-            "review_text":      result["review_text"],
-        }), 200
+                # Generate PDF and upload to GCS for persistent offline access
+                gcs_url = None
+                try:
+                    pdf_bytes = generate_report(result)
+                    gcs_url = upload_report(review_id, pdf_bytes, result["manuscript_title"])
+                except Exception as exc:
+                    logger.warning(f"PDF/GCS step failed (non-fatal): {exc}")
 
-    except ValueError as e:
-        logger.warning(f"Validation error: {e}")
-        return jsonify({"error": str(e)}), 422
-    except RuntimeError as e:
-        logger.error(f"Runtime error: {e}")
-        return jsonify({"error": str(e)}), 500
-    except Exception as e:
-        logger.exception("Unexpected error during review")
-        return jsonify({"error": f"An unexpected error occurred: {e}"}), 500
+                payload = {
+                    "type": "done",
+                    "review_id": review_id,
+                    "manuscript_title": result["manuscript_title"],
+                    "decision": result["decision"],
+                    "word_count": result["word_count"],
+                }
+                if gcs_url:
+                    payload["gcs_url"] = gcs_url
+                yield f"data: {json.dumps(payload)}\n\n"
+            else:
+                yield f"data: {json.dumps(event)}\n\n"
+
+    return Response(
+        stream_with_context(generate()),
+        content_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -148,7 +173,7 @@ def review():
 
 @app.route("/download/<review_id>", methods=["GET"])
 def download_report(review_id: str):
-    """Download the DOCX peer review report for a completed review."""
+    """Download the PDF peer review report for a completed review."""
     result = _review_store.get(review_id)
     if not result:
         return jsonify({
@@ -156,25 +181,22 @@ def download_report(review_id: str):
         }), 404
 
     try:
-        docx_bytes = generate_report(result)
+        pdf_bytes = generate_report(result)
         safe_title = (
             result.get("manuscript_title", "review")[:40]
             .replace(" ", "_")
             .replace("/", "-")
             .replace("\\", "-")
         )
-        download_name = f"PeerReview_{safe_title}.docx"
+        download_name = f"PeerReview_{safe_title}.pdf"
         return send_file(
-            io.BytesIO(docx_bytes),
-            mimetype=(
-                "application/vnd.openxmlformats-officedocument"
-                ".wordprocessingml.document"
-            ),
+            io.BytesIO(pdf_bytes),
+            mimetype="application/pdf",
             as_attachment=True,
             download_name=download_name,
         )
     except Exception as e:
-        logger.exception("Failed to generate DOCX report")
+        logger.exception("Failed to generate PDF report")
         return jsonify({"error": f"Report generation failed: {e}"}), 500
 
 
