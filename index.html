@@ -18,11 +18,29 @@
     header {
       background: linear-gradient(135deg, #1a5c96 0%, #0d3d6e 100%);
       color: #fff;
-      padding: 28px 32px 22px;
+      padding: 20px 32px 16px;
       box-shadow: 0 2px 8px rgba(0,0,0,0.25);
     }
     header h1 { font-size: 1.75rem; font-weight: 700; letter-spacing: -0.3px; }
     header p  { margin-top: 6px; font-size: 0.95rem; opacity: 0.85; }
+
+    /* ── Nav ── */
+    nav {
+      background: #0d3d6e;
+      padding: 0 32px;
+    }
+    nav a {
+      display: inline-block;
+      padding: 11px 22px;
+      color: rgba(255,255,255,0.75);
+      text-decoration: none;
+      font-size: 0.9rem;
+      font-weight: 500;
+      border-bottom: 3px solid transparent;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    nav a:hover  { color: #fff; border-color: rgba(255,255,255,0.4); }
+    nav a.active { color: #fff; border-color: #5ab0f0; }
 
     /* ── Main layout ── */
     main {
@@ -197,6 +215,11 @@
   <h1>&#x1F4CB; AI-Assisted Peer Review System</h1>
   <p>Upload a journal manuscript for automated 8-stage editorial screening powered by Claude AI</p>
 </header>
+
+<nav>
+  <a href="/" class="active">&#x1F50D; Review Tool</a>
+  <a href="/guidelines-page">&#x1F4D6; Guidelines</a>
+</nav>
 
 <main>
 

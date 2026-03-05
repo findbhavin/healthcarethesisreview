@@ -6,11 +6,14 @@ Deployable on GCP Cloud Run.
 Routes
 ------
 GET  /                          Serve the web UI (index.html)
+GET  /guidelines-page           Serve the Guidelines page (guidelines.html)
 GET  /health                    Health check (used by Cloud Run)
 POST /review                    Submit a manuscript for AI peer review
 GET  /download/<review_id>      Download the DOCX report
+GET  /guidelines/full           Return complete guidelines data (for UI)
 GET  /guidelines/metadata       Return current guidelines version/metadata
 GET  /guidelines/journals       Return list of known journals
+GET  /guidelines/changelog      Return guidelines changelog
 POST /guidelines/validate       Validate the current guidelines YAML
 POST /admin/reload-guidelines   Hot-reload guidelines without restart
 """
@@ -28,6 +31,7 @@ from guidelines.guidelines_loader import (
     get_metadata,
     get_changelog,
     get_journal_list,
+    get_full_guidelines,
     validate_guidelines,
 )
 
@@ -57,6 +61,22 @@ def index():
     html_path = os.path.join(os.path.dirname(__file__), "index.html")
     with open(html_path, "r", encoding="utf-8") as f:
         return f.read()
+
+
+@app.route("/guidelines-page", methods=["GET"])
+def guidelines_page():
+    html_path = os.path.join(os.path.dirname(__file__), "guidelines.html")
+    with open(html_path, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+@app.route("/guidelines/full", methods=["GET"])
+def guidelines_full():
+    """Return the complete structured guidelines for UI rendering."""
+    try:
+        return jsonify(get_full_guidelines()), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # ---------------------------------------------------------------------------

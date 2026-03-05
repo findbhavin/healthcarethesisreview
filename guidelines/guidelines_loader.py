@@ -129,6 +129,50 @@ def get_journal_list() -> list[str]:
     return list(data.get("journal_overrides", {}).keys())
 
 
+def get_full_guidelines() -> dict:
+    """
+    Return the complete guidelines data structured for UI rendering.
+    Includes metadata, all stages (sorted), journal overrides, and changelog.
+    """
+    data = _load_yaml()
+
+    stages_out = []
+    for stage_key in sorted(data["stages"].keys()):
+        stage = data["stages"][stage_key]
+        num = stage_key.replace("stage_", "")
+        stages_out.append({
+            "key": stage_key,
+            "number": num,
+            "name": stage.get("name", stage_key),
+            "description": (stage.get("description") or "").strip(),
+            "checks": stage.get("checks", []),
+            "scope_fit_options": stage.get("scope_fit_options", []),
+            "severity_labels": stage.get("severity_labels", []),
+            "decision_options": stage.get("decision_options", []),
+            "instruction": (stage.get("instruction") or "").strip(),
+        })
+
+    journals_out = []
+    for key, jdata in data.get("journal_overrides", {}).items():
+        journals_out.append({
+            "key": key,
+            "full_name": jdata.get("full_name", key),
+            "scope": jdata.get("scope", ""),
+            "reference_style": jdata.get("reference_style", ""),
+            "word_limits": jdata.get("word_limits", {}),
+            "required_sections": jdata.get("required_sections", []),
+            "max_references": jdata.get("max_references", {}),
+        })
+
+    return {
+        "metadata": data.get("metadata", {}),
+        "role": (data.get("role") or "").strip(),
+        "stages": stages_out,
+        "journals": journals_out,
+        "changelog": data.get("changelog", []),
+    }
+
+
 def validate_guidelines() -> dict:
     """
     Validate the guidelines YAML structure.
