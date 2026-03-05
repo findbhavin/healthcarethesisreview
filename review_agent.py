@@ -9,9 +9,10 @@ touching this code.
 """
 
 import os
+import re
 import logging
 import anthropic
-from guidelines.guidelines_loader import build_system_prompt
+from guidelines.guidelines_loader import build_system_prompt, get_stage_weights
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +84,71 @@ def _truncate(text: str) -> str:
         "to reduce latency. Consider splitting very long documents."
     )
     return text[:_MAX_MANUSCRIPT_CHARS] + "\n\n[NOTE: Manuscript truncated at 80,000 characters for processing.]"
+
+
+# ---------------------------------------------------------------------------
+# Score Extraction
+# ---------------------------------------------------------------------------
+
+def _extract_stage_scores(review_text: str) -> dict:
+    """
+    Parse per-stage scores from the review text.
+    Looks for patterns like:
+      Score: 7/10  or  Score: 8/10  (within each STAGE block)
+
+    Returns a dict:
+      {
+        "stage_scores": {1: 7, 2: 9, 3: 6, 4: 8, 5: 7, 6: 9, 7: 10},
+        "weighted_score": 72.5,
+        "wrs_display": "7×8 + 9×12 + ..."
+      }
+    """
+    weights = get_stage_weights()
+    stage_scores: dict[int, int] = {}
+
+    # Find each STAGE N block and look for Score: X/10 within it
+    stage_pattern = re.compile(
+        r"STAGE\s+(\d)\s*:.*?(?=STAGE\s+\d\s*:|END OF REVIEW|$)",
+        re.DOTALL | re.IGNORECASE,
+    )
+    score_pattern = re.compile(r"Score\s*:\s*(\d+)\s*/\s*10", re.IGNORECASE)
+
+    for match in stage_pattern.finditer(review_text):
+        stage_num = int(match.group(1))
+        block_text = match.group(0)
+        score_match = score_pattern.search(block_text)
+        if score_match:
+            stage_scores[stage_num] = min(10, max(0, int(score_match.group(1))))
+
+    # Also try to extract from a "Weighted Review Score" line in Stage 8
+    wrs_line_match = re.search(
+        r"Weighted Review Score.*?:\s*([\d.]+)\s*/\s*100",
+        review_text, re.IGNORECASE,
+    )
+
+    # Compute weighted score from parsed stage scores
+    weighted_sum = 0.0
+    max_possible = 0.0
+    wrs_parts = []
+    for stage_num in range(1, 8):  # Stages 1–7 are scored; Stage 8 is derived
+        weight = weights.get(stage_num, 0)
+        score = stage_scores.get(stage_num)
+        if score is not None and weight > 0:
+            weighted_sum += score * weight
+            max_possible += 10 * weight
+            wrs_parts.append(f"S{stage_num}={score}×{weight}")
+
+    if max_possible > 0:
+        weighted_score = round(weighted_sum / 10, 1)
+    else:
+        # Fall back to the parsed WRS line if available
+        weighted_score = float(wrs_line_match.group(1)) if wrs_line_match else None
+
+    return {
+        "stage_scores": stage_scores,
+        "weighted_score": weighted_score,
+        "wrs_parts": " + ".join(wrs_parts),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -167,6 +233,8 @@ def run_review(file_bytes: bytes, filename: str, journal_name: str = "") -> dict
                 manuscript_title = candidate
             break
 
+    scores = _extract_stage_scores(review_text)
+
     return {
         "manuscript_title": manuscript_title,
         "review_text": review_text,
@@ -174,6 +242,9 @@ def run_review(file_bytes: bytes, filename: str, journal_name: str = "") -> dict
         "decision": decision,
         "filename": filename,
         "journal_name": journal_name,
+        "stage_scores": scores["stage_scores"],
+        "weighted_score": scores["weighted_score"],
+        "wrs_parts": scores["wrs_parts"],
     }
 
 
@@ -243,6 +314,8 @@ def stream_review(file_bytes: bytes, filename: str, journal_name: str = ""):
                     manuscript_title = candidate
                 break
 
+        scores = _extract_stage_scores(review_text)
+
         result = {
             "manuscript_title": manuscript_title,
             "review_text": review_text,
@@ -250,6 +323,9 @@ def stream_review(file_bytes: bytes, filename: str, journal_name: str = ""):
             "decision": decision,
             "filename": filename,
             "journal_name": journal_name,
+            "stage_scores": scores["stage_scores"],
+            "weighted_score": scores["weighted_score"],
+            "wrs_parts": scores["wrs_parts"],
         }
         yield {"type": "done", "result": result}
 

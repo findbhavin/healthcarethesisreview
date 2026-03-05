@@ -150,6 +150,9 @@ def get_full_guidelines() -> dict:
             "severity_labels": stage.get("severity_labels", []),
             "decision_options": stage.get("decision_options", []),
             "instruction": (stage.get("instruction") or "").strip(),
+            "weight": stage.get("weight", 0),
+            "max_score": stage.get("max_score", 10),
+            "score_rubric": stage.get("score_rubric", {}),
         })
 
     journals_out = []
@@ -171,6 +174,19 @@ def get_full_guidelines() -> dict:
         "journals": journals_out,
         "changelog": data.get("changelog", []),
     }
+
+
+def get_stage_weights() -> dict:
+    """
+    Return a dict mapping stage number (int) to its weight (int).
+    E.g. {1: 8, 2: 12, 3: 25, 4: 20, 5: 15, 6: 7, 7: 13, 8: 0}
+    """
+    data = _load_yaml()
+    weights = {}
+    for stage_key, stage in data.get("stages", {}).items():
+        num = int(stage_key.replace("stage_", ""))
+        weights[num] = stage.get("weight", 0)
+    return weights
 
 
 def validate_guidelines() -> dict:

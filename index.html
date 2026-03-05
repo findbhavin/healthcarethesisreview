@@ -112,11 +112,15 @@
       white-space: nowrap;
     }
     .btn:active { transform: scale(0.98); }
-    .btn-primary { background: #1a5c96; color: #fff; }
+    .btn-primary   { background: #1a5c96; color: #fff; }
     .btn-primary:hover { background: #154d80; }
     .btn-primary:disabled { background: #8aabb8; cursor: not-allowed; transform: none; }
-    .btn-download { background: #0d7f46; color: #fff; margin-top: 16px; }
+    .btn-download  { background: #0d7f46; color: #fff; margin-top: 16px; }
     .btn-download:hover { background: #0a6639; }
+    .btn-pay       { background: #1a5c96; color: #fff; }
+    .btn-pay:hover { background: #154d80; }
+    .btn-skip      { background: #e4edf7; color: #1a5c96; border: 1px solid #b0c8e0; }
+    .btn-skip:hover { background: #d0e4f7; }
 
     /* ── Stages checklist (info) ── */
     .stages-grid {
@@ -196,10 +200,80 @@
     }
     .meta-row strong { color: #222; }
 
+    /* ── Scorecard ── */
+    .scorecard {
+      background: #f8faff;
+      border: 1px solid #c5d8f0;
+      border-radius: 8px;
+      padding: 18px 22px;
+      margin-bottom: 18px;
+    }
+    .scorecard h3 { font-size: 1rem; color: #1a5c96; margin-bottom: 12px; }
+    .wrs-summary {
+      display: flex; align-items: center; gap: 16px; margin-bottom: 14px;
+      padding: 10px 16px; background: #fff; border-radius: 8px;
+      border: 1px solid #dce8f5;
+    }
+    .wrs-circle {
+      width: 72px; height: 72px; border-radius: 50%;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      font-weight: 800; font-size: 1.3rem; color: #fff; flex-shrink: 0;
+    }
+    .wrs-circle small { font-size: 0.65rem; font-weight: 500; margin-top: -2px; }
+    .wrs-label { font-size: 0.88rem; color: #556; }
+    .wrs-label strong { display: block; font-size: 1.05rem; color: #1a1a2e; }
+
+    .score-bars { display: flex; flex-direction: column; gap: 7px; }
+    .score-row {
+      display: grid;
+      grid-template-columns: 180px 40px 1fr 60px;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.82rem;
+    }
+    .score-row .stage-lbl { color: #334; font-weight: 500; }
+    .score-row .score-val { font-weight: 700; text-align: right; }
+    .bar-outer {
+      height: 10px; border-radius: 5px; background: #e4edf7; overflow: hidden;
+    }
+    .bar-inner {
+      height: 100%; border-radius: 5px; transition: width 0.6s ease;
+    }
+    .bar-high   { background: #16a34a; }
+    .bar-medium { background: #d97706; }
+    .bar-low    { background: #dc2626; }
+    .score-row .weight-lbl { font-size: 0.75rem; color: #889; text-align: right; }
+
     /* ── Error ── */
     .error-box {
       background: #fff0f0; border: 1px solid #f5c6cb; border-radius: 8px;
       padding: 14px 18px; color: #721c24; font-size: 0.92rem; display: none;
+    }
+
+    /* ── Payment modal ── */
+    .modal-backdrop {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.55);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 1000; animation: fadeIn 0.15s ease;
+    }
+    @keyframes fadeIn { from { opacity:0; } to { opacity:1; } }
+    .modal {
+      background: #fff; border-radius: 12px; padding: 32px 36px;
+      max-width: 480px; width: 90%; box-shadow: 0 8px 32px rgba(0,0,0,0.22);
+      text-align: center;
+    }
+    .modal h2 { font-size: 1.25rem; color: #1a1a2e; margin-bottom: 10px; }
+    .modal p  { font-size: 0.95rem; color: #556; margin-bottom: 20px; line-height: 1.6; }
+    .modal .price-badge {
+      display: inline-block; background: #f0f7ff; border: 2px solid #1a5c96;
+      border-radius: 8px; padding: 8px 22px; font-size: 1.6rem; font-weight: 800;
+      color: #1a5c96; margin-bottom: 20px;
+    }
+    .modal .price-badge small { font-size: 0.85rem; font-weight: 400; color: #556; display: block; }
+    .modal-actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+    .modal-actions .btn { min-width: 160px; justify-content: center; }
+    .modal .secure-note {
+      font-size: 0.78rem; color: #889; margin-top: 16px;
     }
 
     /* ── Footer ── */
@@ -208,6 +282,7 @@
       border-top: 1px solid #dde;
     }
   </style>
+  <!-- Razorpay SDK loaded conditionally after payment config is fetched -->
 </head>
 <body>
 
@@ -261,6 +336,10 @@
       <div class="stage-chip">Stage 7 <span>Ethical &amp; Integrity Checks</span></div>
       <div class="stage-chip">Stage 8 <span>Overall Recommendation</span></div>
     </div>
+    <p style="margin-top:14px;font-size:0.82rem;color:#889;">
+      Weights: S1:8% &middot; S2:12% &middot; S3:25% &middot; S4:20% &middot; S5:15% &middot; S6:7% &middot; S7:13%
+      &nbsp;|&nbsp; Weighted Review Score (WRS) shown after each review.
+    </p>
   </div>
 
   <!-- Progress -->
@@ -277,9 +356,17 @@
     <h2>Review Report</h2>
     <div class="meta-row" id="meta-row"></div>
     <div id="decision-badge"></div>
+
+    <!-- Score card -->
+    <div class="scorecard" id="scorecard" style="display:none">
+      <h3>&#x1F4CA; Weighted Review Score (WRS)</h3>
+      <div class="wrs-summary" id="wrs-summary"></div>
+      <div class="score-bars" id="score-bars"></div>
+    </div>
+
     <div class="review-text" id="review-text"></div>
     <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:12px;">
-      <button class="btn btn-download" id="download-btn" onclick="downloadReport()">
+      <button class="btn btn-download" id="download-btn" onclick="initiateDownload()">
         &#x1F4E5; Download PDF Report
       </button>
       <button class="btn btn-download" id="cloud-btn" onclick="downloadFromCloud()" style="display:none;background:#0d7f46;">
@@ -295,11 +382,58 @@
   This system supports editorial judgment — it does not replace human review.
 </footer>
 
-<script>
-  let currentReviewId = null;
+<!-- ── Payment Modal ── -->
+<div class="modal-backdrop" id="payment-modal" style="display:none" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+  <div class="modal">
+    <div style="font-size:2rem;margin-bottom:8px;">&#x1F4B3;</div>
+    <h2 id="modal-title">Support this service</h2>
+    <p>Would you like to make a small contribution to help sustain this peer review service?</p>
+    <div class="price-badge">
+      &#x20B9;100
+      <small>~$1.20 USD per document &middot; International cards accepted</small>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-pay" id="pay-btn" onclick="startPayment()">
+        &#x1F512; Pay &#x20B9;100 &amp; Download
+      </button>
+      <button class="btn btn-skip" onclick="skipPaymentAndDownload()">
+        Download Free
+      </button>
+    </div>
+    <p class="secure-note">
+      &#x1F512; Secured by Razorpay &middot; Supports INR, USD, EUR, GBP &amp; more<br>
+      Paying is entirely optional — you can download free at any time.
+    </p>
+  </div>
+</div>
 
-  // File selection
-  const fileInput = document.getElementById("manuscript-file");
+<script>
+  let currentReviewId   = null;
+  let paymentConfig     = null;
+  let razorpayLoaded    = false;
+
+  // ── Fetch payment config on load ──────────────────────────────────────────
+  async function loadPaymentConfig() {
+    try {
+      const res = await fetch("/payment/config");
+      if (res.ok) {
+        paymentConfig = await res.json();
+        if (paymentConfig.enabled && !razorpayLoaded) {
+          const s = document.createElement("script");
+          s.src = "https://checkout.razorpay.com/v1/checkout.js";
+          s.async = true;
+          document.head.appendChild(s);
+          razorpayLoaded = true;
+        }
+      }
+    } catch (_) {
+      // Payment config unavailable — will fall back to free download
+    }
+  }
+  loadPaymentConfig();
+
+  // ── File selection ─────────────────────────────────────────────────────────
+  const fileInput  = document.getElementById("manuscript-file");
   const uploadZone = document.getElementById("upload-zone");
   const reviewBtn  = document.getElementById("review-btn");
   const fileNameEl = document.getElementById("file-name");
@@ -314,8 +448,8 @@
     }
   });
 
-  // Drag & drop
-  uploadZone.addEventListener("dragover", e => { e.preventDefault(); uploadZone.classList.add("drag-over"); });
+  // ── Drag & drop ───────────────────────────────────────────────────────────
+  uploadZone.addEventListener("dragover",  e => { e.preventDefault(); uploadZone.classList.add("drag-over"); });
   uploadZone.addEventListener("dragleave", () => uploadZone.classList.remove("drag-over"));
   uploadZone.addEventListener("drop", e => {
     e.preventDefault();
@@ -326,6 +460,7 @@
     }
   });
 
+  // ── Error helpers ─────────────────────────────────────────────────────────
   function showError(msg) {
     const box = document.getElementById("error-box");
     box.textContent = "Error: " + msg;
@@ -337,6 +472,7 @@
     box.textContent = "";
   }
 
+  // ── Decision badge class ───────────────────────────────────────────────────
   function decisionClass(decision) {
     const d = (decision || "").toLowerCase();
     if (d.includes("accept as is") || d === "accept") return "decision-accept";
@@ -346,24 +482,105 @@
     return "decision-default";
   }
 
+  // ── Render review text (highlight STAGE headers) ───────────────────────────
   function renderReviewText(text) {
-    // Highlight STAGE headers
     return text.replace(
       /(STAGE\s+\d+[^:\n]*)/g,
       '<span class="stage-heading">$1</span>'
     );
   }
 
+  // ── Scorecard rendering ───────────────────────────────────────────────────
+  const STAGE_NAMES = {
+    1: "Initial Editorial Screening",
+    2: "Scope & Novelty",
+    3: "Methodology Review",
+    4: "Results & Data Integrity",
+    5: "Discussion & Conclusions",
+    6: "References",
+    7: "Ethical & Integrity",
+  };
+  const STAGE_WEIGHTS = { 1:8, 2:12, 3:25, 4:20, 5:15, 6:7, 7:13 };
+
+  function scoreBarClass(score) {
+    if (score >= 8) return "bar-high";
+    if (score >= 5) return "bar-medium";
+    return "bar-low";
+  }
+  function scoreColor(score) {
+    if (score >= 8) return "#16a34a";
+    if (score >= 5) return "#d97706";
+    return "#dc2626";
+  }
+  function wrsLabel(wrs) {
+    if (wrs >= 90) return "Excellent";
+    if (wrs >= 75) return "Good — Minor Revision";
+    if (wrs >= 50) return "Moderate — Major Revision";
+    return "Poor — Likely Rejection";
+  }
+  function wrsBg(wrs) {
+    if (wrs >= 75) return "#16a34a";
+    if (wrs >= 50) return "#d97706";
+    return "#dc2626";
+  }
+
+  function renderScorecard(stageScores, weightedScore) {
+    if (!stageScores || Object.keys(stageScores).length === 0) return;
+
+    const scorecard = document.getElementById("scorecard");
+    const wrsSummary = document.getElementById("wrs-summary");
+    const scoreBars  = document.getElementById("score-bars");
+
+    scorecard.style.display = "block";
+
+    // WRS summary circle
+    if (weightedScore !== null && weightedScore !== undefined) {
+      const wrs = parseFloat(weightedScore);
+      wrsSummary.innerHTML = `
+        <div class="wrs-circle" style="background:${wrsBg(wrs)}">
+          ${wrs.toFixed(1)}<small>/ 100</small>
+        </div>
+        <div class="wrs-label">
+          <strong>${wrsLabel(wrs)}</strong>
+          Weighted Review Score across 7 reviewed stages<br>
+          <span style="font-size:0.8rem;color:#889;">Higher is better &middot; Weights reflect stage importance</span>
+        </div>
+      `;
+    }
+
+    // Per-stage bars
+    scoreBars.innerHTML = "";
+    for (let s = 1; s <= 7; s++) {
+      const score = stageScores[s] !== undefined ? parseInt(stageScores[s]) : null;
+      if (score === null) continue;
+      const weight = STAGE_WEIGHTS[s];
+      const contribution = ((score * weight) / 10).toFixed(1);
+      const pct = (score / 10 * 100).toFixed(0);
+      const row = document.createElement("div");
+      row.className = "score-row";
+      row.innerHTML = `
+        <span class="stage-lbl">S${s}: ${STAGE_NAMES[s]}</span>
+        <span class="score-val" style="color:${scoreColor(score)}">${score}/10</span>
+        <div class="bar-outer">
+          <div class="bar-inner ${scoreBarClass(score)}" style="width:${pct}%"></div>
+        </div>
+        <span class="weight-lbl">w:${weight}% (+${contribution})</span>
+      `;
+      scoreBars.appendChild(row);
+    }
+  }
+
+  // ── Submit review ──────────────────────────────────────────────────────────
   async function submitReview() {
     clearError();
     currentReviewId = null;
+    document.getElementById("scorecard").style.display = "none";
 
     const file = fileInput.files[0];
     if (!file) { showError("Please select a file first."); return; }
 
     const journalName = document.getElementById("journal-name").value.trim();
 
-    // UI: show progress, hide results
     document.getElementById("progress-section").style.display = "block";
     document.getElementById("results-section").style.display  = "none";
     document.getElementById("cloud-btn").style.display        = "none";
@@ -374,7 +591,6 @@
     formData.append("file", file);
     if (journalName) formData.append("journal_name", journalName);
 
-    // Show a live preview box in the progress section
     let liveBox = document.getElementById("live-preview");
     if (!liveBox) {
       liveBox = document.createElement("pre");
@@ -404,7 +620,7 @@
         buffer += decoder.decode(value, { stream: true });
 
         const lines = buffer.split("\n");
-        buffer = lines.pop(); // keep incomplete line
+        buffer = lines.pop();
 
         for (const line of lines) {
           if (!line.startsWith("data: ")) continue;
@@ -416,7 +632,6 @@
             liveBox.textContent = fullText;
             liveBox.scrollTop   = liveBox.scrollHeight;
 
-            // Show results card early with streaming content
             if (fullText.length > 200 && document.getElementById("results-section").style.display === "none") {
               document.getElementById("results-section").style.display = "block";
               document.getElementById("results-section").scrollIntoView({ behavior: "smooth" });
@@ -435,10 +650,12 @@
                  Decision: ${escHtml(evt.decision)}
                </span>`;
 
+            // Render score card
+            renderScorecard(evt.stage_scores, evt.weighted_score);
+
             document.getElementById("results-section").style.display = "block";
             document.getElementById("results-section").scrollIntoView({ behavior: "smooth" });
 
-            // Show cloud download button if GCS is enabled
             if (evt.gcs_url) {
               const cloudBtn = document.getElementById("cloud-btn");
               cloudBtn.style.display = "inline-block";
@@ -460,15 +677,112 @@
     }
   }
 
-  function downloadReport() {
+  // ── Download flow ─────────────────────────────────────────────────────────
+  function initiateDownload() {
     if (!currentReviewId) { alert("No review available to download."); return; }
+
+    // If payment is enabled, show the modal; otherwise download directly
+    if (paymentConfig && paymentConfig.enabled) {
+      document.getElementById("payment-modal").style.display = "flex";
+    } else {
+      doDownload();
+    }
+  }
+
+  function doDownload() {
     window.location.href = "/download/" + currentReviewId;
+  }
+
+  function skipPaymentAndDownload() {
+    document.getElementById("payment-modal").style.display = "none";
+    doDownload();
+  }
+
+  async function startPayment() {
+    if (!paymentConfig || !paymentConfig.enabled) {
+      skipPaymentAndDownload();
+      return;
+    }
+
+    const payBtn = document.getElementById("pay-btn");
+    payBtn.disabled = true;
+    payBtn.textContent = "Creating order…";
+
+    try {
+      // 1. Create order on backend
+      const res = await fetch("/payment/create-order", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ review_id: currentReviewId }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert("Could not create payment order: " + (err.error || "Server error"));
+        payBtn.disabled = false;
+        payBtn.innerHTML = "&#x1F512; Pay &#x20B9;100 &amp; Download";
+        return;
+      }
+      const order = await res.json();
+
+      // 2. Open Razorpay checkout
+      const rzpOptions = {
+        key: order.key_id,
+        amount: order.amount,
+        currency: order.currency,
+        name: "AI Peer Review System",
+        description: "Peer Review Report Download",
+        order_id: order.order_id,
+        handler: async function(response) {
+          // 3. Verify on backend
+          const verifyRes = await fetch("/payment/verify", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              razorpay_order_id:   response.razorpay_order_id,
+              razorpay_payment_id: response.razorpay_payment_id,
+              razorpay_signature:  response.razorpay_signature,
+              review_id:           currentReviewId,
+            }),
+          });
+          const verifyData = await verifyRes.json();
+          document.getElementById("payment-modal").style.display = "none";
+          if (verifyData.verified) {
+            doDownload();
+          } else {
+            alert("Payment could not be verified. Please try again or download free.");
+          }
+        },
+        prefill: {},
+        theme: { color: "#1a5c96" },
+        modal: {
+          ondismiss: function() {
+            payBtn.disabled = false;
+            payBtn.innerHTML = "&#x1F512; Pay &#x20B9;100 &amp; Download";
+          },
+        },
+      };
+
+      const rzp = new Razorpay(rzpOptions);
+      rzp.open();
+      payBtn.disabled = false;
+      payBtn.innerHTML = "&#x1F512; Pay &#x20B9;100 &amp; Download";
+
+    } catch (err) {
+      alert("Payment error: " + err.message);
+      payBtn.disabled = false;
+      payBtn.innerHTML = "&#x1F512; Pay &#x20B9;100 &amp; Download";
+    }
   }
 
   function downloadFromCloud() {
     const btn = document.getElementById("cloud-btn");
     if (btn._gcsUrl) window.open(btn._gcsUrl, "_blank");
   }
+
+  // ── Close modal on backdrop click ─────────────────────────────────────────
+  document.getElementById("payment-modal").addEventListener("click", function(e) {
+    if (e.target === this) this.style.display = "none";
+  });
 
   function escHtml(str) {
     return (str || "")

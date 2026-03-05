@@ -10,6 +10,8 @@ GET  /guidelines-page           Serve the Guidelines page (guidelines.html)
 GET  /health                    Health check (used by Cloud Run)
 POST /review                    Stream 8-stage AI peer review via SSE (text/event-stream)
 GET  /download/<review_id>      Download the PDF review report
+POST /payment/create-order      Create a Razorpay payment order (₹100 per document)
+POST /payment/verify            Verify Razorpay payment signature and mark review as paid
 GET  /guidelines/full           Return complete guidelines data (for UI)
 GET  /guidelines/metadata       Return current guidelines version/metadata
 GET  /guidelines/journals       Return list of known journals
@@ -19,8 +21,10 @@ POST /admin/reload-guidelines   Hot-reload guidelines without restart
 
 Environment variables
 ---------------------
-ANTHROPIC_API_KEY  : required — Anthropic API key
-GCS_BUCKET         : optional — GCS bucket name for persistent PDF storage
+ANTHROPIC_API_KEY      : required — Anthropic API key
+GCS_BUCKET             : optional — GCS bucket name for persistent PDF storage
+RAZORPAY_KEY_ID        : optional — Razorpay API key (enables payment)
+RAZORPAY_KEY_SECRET    : optional — Razorpay API secret (enables payment)
 """
 
 import os
@@ -28,6 +32,8 @@ import uuid
 import json
 import logging
 import io
+import hmac
+import hashlib
 
 from flask import Flask, request, jsonify, send_file, Response, stream_with_context
 
@@ -53,6 +59,22 @@ ALLOWED_EXTENSIONS = {"pdf", "docx", "txt"}
 # In-memory review store (keyed by review_id).
 # For multi-instance Cloud Run, replace with Cloud Storage or Firestore.
 _review_store: dict[str, dict] = {}
+
+# ---------------------------------------------------------------------------
+# Payment configuration (Razorpay)
+# ---------------------------------------------------------------------------
+# Razorpay is an open-source-friendly payment gateway supporting INR and
+# international currencies (USD, EUR, GBP, AED, SGD, etc.).
+# Docs: https://razorpay.com/docs/
+RAZORPAY_KEY_ID     = os.environ.get("RAZORPAY_KEY_ID", "")
+RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "")
+
+# Payment amount in paise (100 INR = 10000 paise)
+PAYMENT_AMOUNT_PAISE   = 10_000  # ₹100
+PAYMENT_CURRENCY       = "INR"
+PAYMENT_DESCRIPTION    = "Peer Review Report Download — ₹100 per document"
+
+PAYMENT_ENABLED = bool(RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET)
 
 
 def allowed_file(filename: str) -> bool:
@@ -150,6 +172,9 @@ def review():
                     "manuscript_title": result["manuscript_title"],
                     "decision": result["decision"],
                     "word_count": result["word_count"],
+                    "weighted_score": result.get("weighted_score"),
+                    "stage_scores": result.get("stage_scores", {}),
+                    "wrs_parts": result.get("wrs_parts", ""),
                 }
                 if gcs_url:
                     payload["gcs_url"] = gcs_url
@@ -198,6 +223,110 @@ def download_report(review_id: str):
     except Exception as e:
         logger.exception("Failed to generate PDF report")
         return jsonify({"error": f"Report generation failed: {e}"}), 500
+
+
+# ---------------------------------------------------------------------------
+# Payment endpoints (Razorpay)
+# ---------------------------------------------------------------------------
+
+@app.route("/payment/config", methods=["GET"])
+def payment_config():
+    """Return public payment configuration to the frontend."""
+    return jsonify({
+        "enabled": PAYMENT_ENABLED,
+        "key_id": RAZORPAY_KEY_ID if PAYMENT_ENABLED else "",
+        "amount": PAYMENT_AMOUNT_PAISE,
+        "currency": PAYMENT_CURRENCY,
+        "description": PAYMENT_DESCRIPTION,
+        "amount_display": "₹100",
+    })
+
+
+@app.route("/payment/create-order", methods=["POST"])
+def payment_create_order():
+    """
+    Create a Razorpay order for downloading a review PDF.
+
+    JSON body: {"review_id": "..."}
+    Returns: {"order_id": "...", "amount": 10000, "currency": "INR", "key_id": "..."}
+    """
+    if not PAYMENT_ENABLED:
+        return jsonify({"error": "Payment gateway not configured."}), 503
+
+    data = request.get_json(silent=True) or {}
+    review_id = data.get("review_id", "")
+    if not review_id or review_id not in _review_store:
+        return jsonify({"error": "Invalid or expired review ID."}), 400
+
+    try:
+        import razorpay
+        client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
+        order = client.order.create({
+            "amount": PAYMENT_AMOUNT_PAISE,
+            "currency": PAYMENT_CURRENCY,
+            "receipt": f"review_{review_id[:16]}",
+            "notes": {
+                "review_id": review_id,
+                "product": "Peer Review PDF Download",
+            },
+        })
+        logger.info(f"Razorpay order created: {order['id']} for review {review_id}")
+        return jsonify({
+            "order_id": order["id"],
+            "amount": PAYMENT_AMOUNT_PAISE,
+            "currency": PAYMENT_CURRENCY,
+            "key_id": RAZORPAY_KEY_ID,
+            "review_id": review_id,
+        })
+    except Exception as e:
+        logger.exception("Failed to create Razorpay order")
+        return jsonify({"error": f"Payment order creation failed: {e}"}), 500
+
+
+@app.route("/payment/verify", methods=["POST"])
+def payment_verify():
+    """
+    Verify Razorpay payment signature and mark the review as paid.
+
+    JSON body:
+      {
+        "razorpay_order_id": "...",
+        "razorpay_payment_id": "...",
+        "razorpay_signature": "...",
+        "review_id": "..."
+      }
+    Returns: {"verified": true, "review_id": "..."}
+    """
+    if not PAYMENT_ENABLED:
+        return jsonify({"error": "Payment gateway not configured."}), 503
+
+    data = request.get_json(silent=True) or {}
+    order_id   = data.get("razorpay_order_id", "")
+    payment_id = data.get("razorpay_payment_id", "")
+    signature  = data.get("razorpay_signature", "")
+    review_id  = data.get("review_id", "")
+
+    if not all([order_id, payment_id, signature, review_id]):
+        return jsonify({"error": "Missing payment verification fields."}), 400
+
+    # Verify HMAC-SHA256 signature: key=secret, msg=order_id|payment_id
+    expected = hmac.new(
+        RAZORPAY_KEY_SECRET.encode(),
+        f"{order_id}|{payment_id}".encode(),
+        hashlib.sha256,
+    ).hexdigest()
+
+    if not hmac.compare_digest(expected, signature):
+        logger.warning(f"Payment signature mismatch for order {order_id}")
+        return jsonify({"error": "Payment verification failed — signature mismatch."}), 400
+
+    # Mark review as paid
+    if review_id in _review_store:
+        _review_store[review_id]["payment_verified"] = True
+        _review_store[review_id]["payment_id"] = payment_id
+        logger.info(f"Payment verified for review {review_id}, payment {payment_id}")
+
+    return jsonify({"verified": True, "review_id": review_id})
 
 
 # ---------------------------------------------------------------------------
