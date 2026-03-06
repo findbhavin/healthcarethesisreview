@@ -129,6 +129,8 @@ def review():
     Form fields:
       file         : required — PDF, DOCX, or TXT
       journal_name : optional — target journal (e.g. NJCM, BMJ, PLOS ONE)
+      article_type : optional — e.g. "original research", "RCT", "systematic review"
+      journal_tier : optional — e.g. "high-impact", "mid-tier specialist"
 
     Response: text/event-stream with JSON lines:
       data: {"type":"chunk","text":"..."}
@@ -147,13 +149,23 @@ def review():
         }), 400
 
     journal_name = request.form.get("journal_name", "").strip()
+    article_type = request.form.get("article_type", "").strip()
+    journal_tier = request.form.get("journal_tier", "").strip()
     file_bytes = file.read()
     filename = file.filename
-    logger.info(f"Received '{filename}' ({len(file_bytes):,} bytes) journal='{journal_name}'")
+    logger.info(
+        f"Received '{filename}' ({len(file_bytes):,} bytes) "
+        f"journal='{journal_name}' article_type='{article_type}' tier='{journal_tier}'"
+    )
 
     def generate():
         review_id = str(uuid.uuid4())
-        for event in stream_review(file_bytes, filename, journal_name=journal_name):
+        for event in stream_review(
+            file_bytes, filename,
+            journal_name=journal_name,
+            article_type=article_type,
+            journal_tier=journal_tier,
+        ):
             if event["type"] == "done":
                 result = event["result"]
                 _review_store[review_id] = result

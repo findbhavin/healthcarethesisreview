@@ -155,7 +155,8 @@ def _extract_stage_scores(review_text: str) -> dict:
 # Review Runner
 # ---------------------------------------------------------------------------
 
-def run_review(file_bytes: bytes, filename: str, journal_name: str = "") -> dict:
+def run_review(file_bytes: bytes, filename: str, journal_name: str = "",
+               article_type: str = "", journal_tier: str = "") -> dict:
     """
     Run the AI peer review on an uploaded manuscript file.
 
@@ -192,7 +193,16 @@ def run_review(file_bytes: bytes, filename: str, journal_name: str = "") -> dict
     # Build system prompt from guidelines YAML (picks up any SME edits)
     system_prompt = build_system_prompt(journal_name=journal_name)
 
+    # Build context header for article type and journal tier
+    context_lines = []
+    if article_type:
+        context_lines.append(f"Article Type: {article_type}")
+    if journal_tier:
+        context_lines.append(f"Target Journal Tier: {journal_tier}")
+    context_header = ("\n".join(context_lines) + "\n\n") if context_lines else ""
+
     user_message = (
+        f"{context_header}"
         f"Please conduct a full peer review of the following manuscript:\n\n"
         f"--- MANUSCRIPT BEGIN ---\n{manuscript_text}\n--- MANUSCRIPT END ---"
     )
@@ -242,13 +252,16 @@ def run_review(file_bytes: bytes, filename: str, journal_name: str = "") -> dict
         "decision": decision,
         "filename": filename,
         "journal_name": journal_name,
+        "article_type": article_type,
+        "journal_tier": journal_tier,
         "stage_scores": scores["stage_scores"],
         "weighted_score": scores["weighted_score"],
         "wrs_parts": scores["wrs_parts"],
     }
 
 
-def stream_review(file_bytes: bytes, filename: str, journal_name: str = ""):
+def stream_review(file_bytes: bytes, filename: str, journal_name: str = "",
+                  article_type: str = "", journal_tier: str = ""):
     """
     Streaming version of run_review. Yields dicts for SSE:
       {"type": "chunk", "text": "..."}          — incremental text
@@ -271,7 +284,14 @@ def stream_review(file_bytes: bytes, filename: str, journal_name: str = ""):
         )
 
         system_prompt = build_system_prompt(journal_name=journal_name)
+        context_lines = []
+        if article_type:
+            context_lines.append(f"Article Type: {article_type}")
+        if journal_tier:
+            context_lines.append(f"Target Journal Tier: {journal_tier}")
+        context_header = ("\n".join(context_lines) + "\n\n") if context_lines else ""
         user_message = (
+            f"{context_header}"
             f"Please conduct a full peer review of the following manuscript:\n\n"
             f"--- MANUSCRIPT BEGIN ---\n{manuscript_text}\n--- MANUSCRIPT END ---"
         )
@@ -323,6 +343,8 @@ def stream_review(file_bytes: bytes, filename: str, journal_name: str = ""):
             "decision": decision,
             "filename": filename,
             "journal_name": journal_name,
+            "article_type": article_type,
+            "journal_tier": journal_tier,
             "stage_scores": scores["stage_scores"],
             "weighted_score": scores["weighted_score"],
             "wrs_parts": scores["wrs_parts"],

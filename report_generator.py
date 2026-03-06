@@ -103,6 +103,253 @@ def _esc(text: str) -> str:
     return (text or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+# ── Line-type classifiers ──────────────────────────────────────────────────
+
+_RE_SCORE_LINE     = re.compile(r"^Score\s*:\s*(\d+)\s*/\s*10", re.IGNORECASE)
+_RE_WRS_LINE       = re.compile(r"^Weighted Review Score", re.IGNORECASE)
+_RE_DECISION_LINE  = re.compile(r"^Decision\s*:", re.IGNORECASE)
+_RE_SUMMARY_LINE   = re.compile(r"^Summary\s*:", re.IGNORECASE)
+_RE_SCOPE_LINE     = re.compile(r"^Scope Fit\s*:", re.IGNORECASE)
+_RE_BREAKDOWN_LINE = re.compile(r"^Score Breakdown\s*:", re.IGNORECASE)
+_RE_SEPARATOR      = re.compile(r"^-{3,}$")
+_RE_BULLET         = re.compile(r"^[-•*]\s+")
+_RE_NUMBERED       = re.compile(r"^\d+\.\s+")
+_RE_SUB_HEADING    = re.compile(r"^[A-Z][A-Za-z &/()]+:\s*$")   # e.g. "Key Required Revisions:"
+_RE_INLINE_LABEL   = re.compile(r"^([A-Z][A-Za-z &/()]+):\s+(.+)$")  # e.g. "Decision: Major revision"
+_RE_SEVERITY_TAG   = re.compile(r"^\[?(MAJOR|MINOR|SUGGESTION)\]?\s*[-:]?\s*", re.IGNORECASE)
+
+
+def _render_stage_body(stage_content: str, styles,
+                        body_style, body_major, body_minor, body_sug,
+                        h2_style, h3_style) -> list:
+    """
+    Convert stage content text into a rich list of reportlab Flowables.
+    Handles: score badges, decision boxes, bullet/numbered lists,
+    severity-tagged items, sub-headings, scope fit, separators, and plain text.
+    All text is preserved — nothing is skipped.
+    """
+
+    score_badge_style = ParagraphStyle(
+        "ScoreBadge", parent=styles["Normal"],
+        fontSize=10, fontName="Helvetica-Bold",
+        spaceBefore=4, spaceAfter=4,
+    )
+    decision_style = ParagraphStyle(
+        "DecisionBox", parent=styles["Normal"],
+        fontSize=11, fontName="Helvetica-Bold",
+        spaceBefore=6, spaceAfter=6,
+        leftIndent=8, borderPad=6,
+    )
+    summary_style = ParagraphStyle(
+        "Summary", parent=styles["Normal"],
+        fontSize=9.5, leading=14, fontName="Helvetica-Oblique",
+        spaceBefore=3, spaceAfter=3,
+    )
+    sub_heading_style = ParagraphStyle(
+        "SubH", parent=styles["Normal"],
+        fontSize=10, fontName="Helvetica-Bold",
+        textColor=C_BLUE, spaceBefore=8, spaceAfter=3,
+    )
+    bullet_style = ParagraphStyle(
+        "Bullet", parent=styles["Normal"],
+        fontSize=9.5, leading=14, spaceAfter=2,
+        leftIndent=14, firstLineIndent=-10,
+    )
+    numbered_style = ParagraphStyle(
+        "Numbered", parent=styles["Normal"],
+        fontSize=9.5, leading=14, spaceAfter=2,
+        leftIndent=20, firstLineIndent=-14,
+    )
+    scope_style = ParagraphStyle(
+        "Scope", parent=styles["Normal"],
+        fontSize=10, fontName="Helvetica-Bold",
+        spaceBefore=4, spaceAfter=4,
+    )
+    inline_label_style = ParagraphStyle(
+        "InlineLabel", parent=styles["Normal"],
+        fontSize=9.5, leading=14, spaceAfter=3,
+    )
+
+    items = []
+    lines = stage_content.splitlines()
+    i = 0
+
+    while i < len(lines):
+        raw = lines[i]
+        stripped = raw.strip()
+        i += 1
+
+        # ── Skip empty lines → small spacer ───────────────────────────────
+        if not stripped:
+            items.append(Spacer(1, 4))
+            continue
+
+        # ── Separator lines (---) → thin HR ───────────────────────────────
+        if _RE_SEPARATOR.match(stripped):
+            items.append(HRFlowable(width="100%", thickness=0.5,
+                                    color=C_BLUE_LIGHT, spaceBefore=4, spaceAfter=4))
+            continue
+
+        # ── Stage heading line (e.g. "STAGE 3: METHODOLOGY REVIEW") ──────
+        matched_stage = any(stripped.upper().startswith(sh) for sh in STAGE_HEADERS)
+        if matched_stage:
+            # Already rendered as the section heading; skip this line
+            continue
+
+        # ── Score line (Score: 7/10) ───────────────────────────────────────
+        m = _RE_SCORE_LINE.match(stripped)
+        if m:
+            score_val = int(m.group(1))
+            sc = _score_color(score_val)
+            sc_hex = sc.hexval()
+            label = f'<font color="{sc_hex}">&#x25CF;</font> <b>Score: <font color="{sc_hex}">{score_val}/10</font></b>'
+            # Add rating label
+            if score_val >= 9:   rating = "Excellent"
+            elif score_val >= 7: rating = "Good"
+            elif score_val >= 5: rating = "Adequate"
+            elif score_val >= 3: rating = "Poor"
+            else:                rating = "Critical"
+            label += f' <font color="{C_GREY.hexval()}">— {rating}</font>'
+            items.append(Paragraph(label, score_badge_style))
+            continue
+
+        # ── Weighted Review Score line ─────────────────────────────────────
+        if _RE_WRS_LINE.match(stripped):
+            items.append(Paragraph(f"<b>{_esc(stripped)}</b>", score_badge_style))
+            continue
+
+        # ── Score Breakdown line ───────────────────────────────────────────
+        if _RE_BREAKDOWN_LINE.match(stripped):
+            items.append(Paragraph(_esc(stripped),
+                         ParagraphStyle("BD", parent=styles["Normal"],
+                                        fontSize=8.5, textColor=C_GREY,
+                                        fontName="Helvetica-Oblique",
+                                        spaceAfter=3)))
+            continue
+
+        # ── Decision line ──────────────────────────────────────────────────
+        if _RE_DECISION_LINE.match(stripped):
+            decision_text = stripped.split(":", 1)[1].strip() if ":" in stripped else stripped
+            dec_color = _decision_color(decision_text)
+            hex_c = dec_color.hexval()
+            items.append(Paragraph(
+                f'<b>Decision: <font color="{hex_c}">{_esc(decision_text)}</font></b>',
+                decision_style,
+            ))
+            continue
+
+        # ── Scope Fit line ─────────────────────────────────────────────────
+        if _RE_SCOPE_LINE.match(stripped):
+            scope_val = stripped.split(":", 1)[1].strip() if ":" in stripped else stripped
+            if "strong" in scope_val.lower():
+                sc_color = C_ACCEPT
+            elif "out of scope" in scope_val.lower():
+                sc_color = C_REJECT
+            else:
+                sc_color = C_AMBER
+            items.append(Paragraph(
+                f'<b>Scope Fit: <font color="{sc_color.hexval()}">{_esc(scope_val)}</font></b>',
+                scope_style,
+            ))
+            continue
+
+        # ── Summary line ───────────────────────────────────────────────────
+        if _RE_SUMMARY_LINE.match(stripped):
+            rest = stripped.split(":", 1)[1].strip() if ":" in stripped else ""
+            if rest:
+                items.append(Paragraph(f"<b>Summary:</b> <i>{_esc(rest)}</i>", summary_style))
+            else:
+                items.append(Paragraph(f"<b>Summary:</b>", sub_heading_style))
+            continue
+
+        # ── Standalone sub-headings (e.g. "Key Required Revisions:") ──────
+        if _RE_SUB_HEADING.match(stripped):
+            items.append(Paragraph(f"<b>{_esc(stripped)}</b>", sub_heading_style))
+            continue
+
+        # ── Severity-tagged items: MAJOR / MINOR / SUGGESTION ─────────────
+        sev_match = _RE_SEVERITY_TAG.match(stripped)
+        if sev_match:
+            sev_word = sev_match.group(1).upper()
+            rest_of_line = stripped[sev_match.end():].strip()
+            if sev_word == "MAJOR":
+                tag_hex = C_MAJOR.hexval()
+                st = body_major
+            elif sev_word == "MINOR":
+                tag_hex = C_AMBER.hexval()
+                st = body_minor
+            else:
+                tag_hex = C_SUGGEST.hexval()
+                st = body_sug
+            label = f'<font color="{tag_hex}"><b>[{sev_word}]</b></font> {_esc(rest_of_line)}'
+            items.append(Paragraph(label, st))
+            continue
+
+        # ── Inline label:value lines (e.g. "Manuscript Type: RCT") ────────
+        # Only match if there's actual content after the colon
+        m2 = _RE_INLINE_LABEL.match(stripped)
+        if m2 and len(m2.group(1)) <= 40:
+            lbl  = m2.group(1)
+            val  = m2.group(2)
+            # Don't re-process known special labels handled above
+            skip_labels = {"Score", "Decision", "Scope Fit", "Summary",
+                           "Weighted Review Score", "Score Breakdown",
+                           "Reviewer", "Date of Review", "Manuscript Title",
+                           "Manuscript Type"}
+            if lbl not in skip_labels:
+                items.append(Paragraph(
+                    f"<b>{_esc(lbl)}:</b> {_esc(val)}",
+                    inline_label_style,
+                ))
+                continue
+
+        # ── Bullet points ─────────────────────────────────────────────────
+        if _RE_BULLET.match(stripped):
+            content = _RE_BULLET.sub("", stripped)
+            # Check if this bullet itself has a severity colour
+            sev_color = _severity_color(content)
+            if sev_color == C_MAJOR:
+                st = ParagraphStyle("BulMaj", parent=bullet_style, textColor=C_MAJOR)
+            elif sev_color == C_AMBER:
+                st = ParagraphStyle("BulMin", parent=bullet_style, textColor=C_AMBER)
+            elif sev_color == C_SUGGEST:
+                st = ParagraphStyle("BulSug", parent=bullet_style, textColor=C_SUGGEST)
+            else:
+                st = bullet_style
+            items.append(Paragraph(f"&#x2022; {_esc(content)}", st))
+            continue
+
+        # ── Numbered list items ───────────────────────────────────────────
+        if _RE_NUMBERED.match(stripped):
+            # Preserve the number prefix
+            content = stripped
+            sev_color = _severity_color(content)
+            if sev_color == C_MAJOR:
+                st = ParagraphStyle("NumMaj", parent=numbered_style, textColor=C_MAJOR)
+            elif sev_color == C_AMBER:
+                st = ParagraphStyle("NumMin", parent=numbered_style, textColor=C_AMBER)
+            elif sev_color == C_SUGGEST:
+                st = ParagraphStyle("NumSug", parent=numbered_style, textColor=C_SUGGEST)
+            else:
+                st = numbered_style
+            items.append(Paragraph(_esc(content), st))
+            continue
+
+        # ── Everything else: plain body text, severity-colour if applicable
+        sev_color = _severity_color(stripped)
+        if sev_color == C_MAJOR:
+            st = body_major
+        elif sev_color == C_AMBER:
+            st = body_minor
+        elif sev_color == C_SUGGEST:
+            st = body_sug
+        else:
+            st = body_style
+        items.append(Paragraph(_esc(stripped), st))
+
+    return items
+
+
 def _score_color(score: int):
     if score >= 8:
         return C_SCORE_HIGH
@@ -229,6 +476,290 @@ def _build_scorecard(review_result: dict, styles) -> list:
     return story
 
 
+def _extract_revision_items(review_text: str) -> list[dict]:
+    """
+    Parse the review text and extract all actionable findings into a flat list:
+      [{"section": "STAGE 3: Methodology Review",
+        "comment": "No power calculation provided.",
+        "priority": "MAJOR"},  ...]
+
+    Covers MAJOR / MINOR / SUGGESTION tags and numbered items from
+    "Key Required Revisions" in Stage 8.
+    """
+    items = []
+    stages = _split_into_stages(review_text)
+    sev_re = re.compile(r"^\[?(MAJOR|MINOR|SUGGESTION)\]?\s*[-:]?\s*(.+)", re.IGNORECASE)
+    numbered_re = re.compile(r"^\d+\.\s+(.+)")
+
+    stage_display = {
+        "STAGE 1": "Stage 1 — Initial Editorial Screening",
+        "STAGE 2": "Stage 2 — Scope & Novelty",
+        "STAGE 3": "Stage 3 — Methodology",
+        "STAGE 4": "Stage 4 — Results & Data Integrity",
+        "STAGE 5": "Stage 5 — Discussion & Conclusions",
+        "STAGE 6": "Stage 6 — References",
+        "STAGE 7": "Stage 7 — Ethics & Integrity",
+        "STAGE 8": "Stage 8 — Overall Recommendation",
+    }
+
+    for stage_key in STAGE_HEADERS:
+        block = stages.get(stage_key, "")
+        if not block:
+            continue
+        section_label = stage_display.get(stage_key, stage_key)
+
+        for line in block.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+
+            m = sev_re.match(stripped)
+            if m:
+                sev = m.group(1).upper()
+                comment = m.group(2).strip()
+                if comment:
+                    items.append({
+                        "section": section_label,
+                        "comment": comment,
+                        "priority": sev,
+                    })
+                continue
+
+            # Numbered items inside "Key Required Revisions" (Stage 8)
+            if stage_key == "STAGE 8":
+                m2 = numbered_re.match(stripped)
+                if m2:
+                    items.append({
+                        "section": section_label,
+                        "comment": m2.group(1).strip(),
+                        "priority": "MAJOR",
+                    })
+
+    return items
+
+
+def _priority_color(priority: str):
+    p = priority.upper()
+    if p == "MAJOR":       return C_MAJOR
+    if p == "MINOR":       return C_AMBER
+    if p == "SUGGESTION":  return C_SUGGEST
+    return C_DARK
+
+
+def _build_author_revision_report(review_result: dict, story: list, styles,
+                                  h2_style, h3_style, body_style,
+                                  label_style, value_style) -> None:
+    """
+    Append the Author Revision Report section to `story`.
+
+    Mirrors the NJCM Author Revision Report form:
+    one master table listing all MAJOR / MINOR / SUGGESTION items with an
+    empty "Author Response" column for the author to complete.
+    Then per-stage sub-tables match the section layout of the DOCX form.
+    """
+    review_text = review_result.get("review_text", "")
+    items = _extract_revision_items(review_text)
+    if not items:
+        return
+
+    manuscript_title = review_result.get("manuscript_title", "—")
+    decision         = review_result.get("decision", "—")
+    dec_color        = _decision_color(decision)
+
+    small_style = ParagraphStyle(
+        "ARSmall", parent=styles["Normal"],
+        fontSize=8.5, leading=12, spaceAfter=1,
+    )
+    response_style = ParagraphStyle(
+        "ARResp", parent=styles["Normal"],
+        fontSize=8, leading=11, textColor=colors.HexColor("#777777"),
+        fontName="Helvetica-Oblique",
+    )
+    cell_label = ParagraphStyle(
+        "ARCellLbl", parent=styles["Normal"],
+        fontSize=8.5, fontName="Helvetica-Bold",
+    )
+    priority_style_maj = ParagraphStyle(
+        "ARPriMaj", parent=styles["Normal"],
+        fontSize=8, fontName="Helvetica-Bold", textColor=C_MAJOR,
+    )
+    priority_style_min = ParagraphStyle(
+        "ARPriMin", parent=styles["Normal"],
+        fontSize=8, fontName="Helvetica-Bold", textColor=C_AMBER,
+    )
+    priority_style_sug = ParagraphStyle(
+        "ARPriSug", parent=styles["Normal"],
+        fontSize=8, fontName="Helvetica-Bold", textColor=C_SUGGEST,
+    )
+
+    def prio_style(p):
+        if p == "MAJOR":      return priority_style_maj
+        if p == "MINOR":      return priority_style_min
+        return priority_style_sug
+
+    # ── New page + section header ──────────────────────────────────────────
+    from reportlab.platypus import PageBreak
+    story.append(PageBreak())
+
+    story.append(Paragraph("AUTHOR REVISION REPORT", h2_style))
+    story.append(Paragraph(
+        "Consolidated Review Comments for Author Response — NJCM Editorial Office",
+        ParagraphStyle("ARSub", parent=styles["Normal"],
+                       fontSize=9, textColor=C_GREY, fontName="Helvetica-Oblique",
+                       spaceAfter=10),
+    ))
+    story.append(HRFlowable(width="100%", thickness=1.5, color=C_BLUE, spaceAfter=10))
+
+    # ── Manuscript info + decision ─────────────────────────────────────────
+    ms_info = [
+        [Paragraph("Manuscript Title", label_style),
+         Paragraph(_esc(manuscript_title), value_style)],
+        [Paragraph("Editorial Decision", label_style),
+         Paragraph(f'<font color="{dec_color.hexval()}"><b>{_esc(decision)}</b></font>',
+                   value_style)],
+    ]
+    ms_table = Table(ms_info, colWidths=[4*cm, 11.5*cm])
+    ms_table.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (0, -1), C_BLUE_LIGHT),
+        ("BACKGROUND",    (1, 0), (1, -1), C_BLUE_BG),
+        ("GRID",          (0, 0), (-1, -1), 0.4, colors.HexColor("#B0C8E0")),
+        ("VALIGN",        (0, 0), (-1, -1), "TOP"),
+        ("TOPPADDING",    (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 8),
+        ("RIGHTPADDING",  (0, 0), (-1, -1), 8),
+    ]))
+    story.append(ms_table)
+    story.append(Spacer(1, 12))
+
+    # ── Instructions box ───────────────────────────────────────────────────
+    instructions = [
+        "1. All comments in this form must be addressed in your revised manuscript.",
+        "2. Complete the Author Response column for EVERY numbered comment.",
+        "3. Indicate the page and line number of the revision made.",
+        "4. Priority levels — MAJOR: must be addressed; MINOR: should be addressed; "
+        "SUGGESTION: optional but encouraged.",
+        "5. Submit your revised manuscript along with this completed form.",
+        "6. If you disagree with a comment, provide a clear scientific justification.",
+    ]
+    instr_style = ParagraphStyle(
+        "ARInstr", parent=styles["Normal"],
+        fontSize=8.5, leading=13, spaceAfter=2,
+    )
+    story.append(Paragraph("<b>Instructions to Authors</b>", h3_style))
+    for instr in instructions:
+        story.append(Paragraph(f"&#x25B8; {_esc(instr)}", instr_style))
+    story.append(Spacer(1, 10))
+
+    # ── Priority legend ────────────────────────────────────────────────────
+    legend_data = [
+        [Paragraph("<b>Priority</b>", cell_label),
+         Paragraph("<b>Meaning</b>", cell_label)],
+        [Paragraph('<font color="#CC0000"><b>MAJOR</b></font>', small_style),
+         Paragraph("Must be addressed — may cause rejection if not resolved", small_style)],
+        [Paragraph('<font color="#B86E00"><b>MINOR</b></font>', small_style),
+         Paragraph("Should be addressed — justify if not done", small_style)],
+        [Paragraph('<font color="#007000"><b>SUGGESTION</b></font>', small_style),
+         Paragraph("Optional — encouraged for quality improvement", small_style)],
+    ]
+    legend_table = Table(legend_data, colWidths=[3*cm, 12.5*cm])
+    legend_table.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, 0), C_BLUE),
+        ("TEXTCOLOR",     (0, 0), (-1, 0), C_WHITE),
+        ("BACKGROUND",    (0, 1), (-1, -1), C_BLUE_BG),
+        ("GRID",          (0, 0), (-1, -1), 0.4, colors.HexColor("#B0C8E0")),
+        ("VALIGN",        (0, 0), (-1, -1), "TOP"),
+        ("TOPPADDING",    (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 7),
+        ("RIGHTPADDING",  (0, 0), (-1, -1), 7),
+    ]))
+    story.append(legend_table)
+    story.append(Spacer(1, 14))
+
+    # ── Per-section comment tables ─────────────────────────────────────────
+    # Group items by section
+    from collections import OrderedDict
+    sections_map: dict[str, list] = OrderedDict()
+    for item in items:
+        sec = item["section"]
+        sections_map.setdefault(sec, []).append(item)
+
+    col_w_table = [1*cm, 5.5*cm, 2*cm, 7*cm]  # No | Section | Priority | Author Response
+
+    for section_label, sec_items in sections_map.items():
+        story.append(Paragraph(f"<b>{_esc(section_label)}</b>", h3_style))
+
+        # Table header
+        tbl_data = [
+            [
+                Paragraph("<b>No.</b>", cell_label),
+                Paragraph("<b>Comment / Revision Required</b>", cell_label),
+                Paragraph("<b>Priority</b>", cell_label),
+                Paragraph("<b>Author Response</b><br/><font size='7'>(page &amp; line no. of revision)</font>",
+                          cell_label),
+            ]
+        ]
+
+        for idx, item in enumerate(sec_items, 1):
+            priority = item["priority"]
+            pc = _priority_color(priority)
+            pc_hex = pc.hexval()
+            tbl_data.append([
+                Paragraph(str(idx), small_style),
+                Paragraph(_esc(item["comment"]), small_style),
+                Paragraph(
+                    f'<font color="{pc_hex}"><b>{_esc(priority)}</b></font>',
+                    prio_style(priority),
+                ),
+                Paragraph("", response_style),  # blank for author to complete
+            ])
+
+        tbl = Table(tbl_data, colWidths=col_w_table,
+                    repeatRows=1)  # repeat header if table spans pages
+        tbl.setStyle(TableStyle([
+            # Header row
+            ("BACKGROUND",     (0, 0), (-1, 0), C_BLUE),
+            ("TEXTCOLOR",      (0, 0), (-1, 0), C_WHITE),
+            # Data rows alternating
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [C_WHITE, C_BLUE_BG]),
+            # Grid
+            ("GRID",           (0, 0), (-1, -1), 0.4, colors.HexColor("#B0C8E0")),
+            # Alignment
+            ("VALIGN",         (0, 0), (-1, -1), "TOP"),
+            ("ALIGN",          (0, 0), (0, -1), "CENTER"),   # No. column centered
+            ("ALIGN",          (2, 0), (2, -1), "CENTER"),   # Priority column centered
+            # Padding
+            ("TOPPADDING",     (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING",  (0, 0), (-1, -1), 16),        # extra height for author to write
+            ("LEFTPADDING",    (0, 0), (-1, -1), 6),
+            ("RIGHTPADDING",   (0, 0), (-1, -1), 6),
+            # Row 0 padding
+            ("TOPPADDING",     (0, 0), (-1, 0), 4),
+            ("BOTTOMPADDING",  (0, 0), (-1, 0), 4),
+        ]))
+        story.append(tbl)
+        story.append(Spacer(1, 14))
+
+    # ── Submission reminder ────────────────────────────────────────────────
+    story.append(HRFlowable(width="100%", thickness=0.8, color=C_BLUE_LIGHT,
+                            spaceBefore=10, spaceAfter=8))
+    story.append(Paragraph(
+        "Please submit this completed form with your revised manuscript "
+        "via the journal's online submission system.",
+        ParagraphStyle("ARFooter", parent=styles["Normal"],
+                       fontSize=8.5, textColor=C_GREY,
+                       fontName="Helvetica-Oblique", alignment=1),
+    ))
+    story.append(Spacer(1, 6))
+    story.append(Paragraph(
+        "Author Revision Report  |  Form v2.0  |  AI-Assisted Editorial Review System",
+        ParagraphStyle("ARFooter2", parent=styles["Normal"],
+                       fontSize=7.5, textColor=C_GREY,
+                       fontName="Helvetica-Oblique", alignment=1),
+    ))
+
+
 def generate_report(review_result: dict) -> bytes:
     """
     Generate a PDF report from the review_result dict produced by run_review().
@@ -325,41 +856,54 @@ def generate_report(review_result: dict) -> bytes:
 
     stages = _split_into_stages(review_result.get("review_text",""))
 
+    stage_scores = review_result.get("stage_scores") or {}
+
     for stage_key in STAGE_HEADERS:
-        stage_content = stages.get(stage_key,"")
+        stage_content = stages.get(stage_key, "")
         if not stage_content:
             continue
 
         title = STAGE_TITLES.get(stage_key, stage_key)
-        heading = Paragraph(f"<b>{stage_key}: {title}</b>", h2_style)
 
-        lines = stage_content.splitlines()
-        body_items = [heading]
-        skip_first = True
-        for line in lines:
-            if skip_first and line.strip().upper().startswith(stage_key):
-                skip_first = False
-                continue
-            skip_first = False
-            stripped = line.strip()
-            if not stripped:
-                body_items.append(Spacer(1, 3))
-                continue
-            sev_color = _severity_color(stripped)
-            if sev_color == C_MAJOR:
-                st = body_major
-            elif sev_color == C_AMBER:
-                st = body_minor
-            elif sev_color == C_SUGGEST:
-                st = body_sug
-            else:
-                st = body_style
-            body_items.append(Paragraph(_esc(stripped), st))
+        # Stage number for score lookup (e.g. "STAGE 3" → 3)
+        stage_num_match = re.search(r"\d+", stage_key)
+        stage_num = int(stage_num_match.group()) if stage_num_match else None
+        stage_score = stage_scores.get(stage_num) if stage_num else None
 
-        story.append(KeepTogether(body_items[:4]))  # keep heading + first few lines together
-        for item in body_items[4:]:
+        # Build heading with inline score badge if available
+        if stage_score is not None and stage_num != 8:
+            sc = _score_color(stage_score)
+            heading_html = (
+                f'<b>{_esc(stage_key)}: {_esc(title)}</b>'
+                f'&nbsp;&nbsp;<font color="{sc.hexval()}" size="10">({stage_score}/10)</font>'
+            )
+        else:
+            heading_html = f"<b>{_esc(stage_key)}: {_esc(title)}</b>"
+
+        heading = Paragraph(heading_html, h2_style)
+
+        # Coloured left-border box per stage (background highlight strip)
+        body_items = [
+            heading,
+            HRFlowable(width="100%", thickness=0.6, color=C_BLUE_LIGHT, spaceAfter=5),
+        ]
+
+        # Render full stage body using the detailed renderer
+        body_items.extend(
+            _render_stage_body(
+                stage_content, styles,
+                body_style, body_major, body_minor, body_sug,
+                h2_style, h3_style,
+            )
+        )
+
+        # Keep heading + HR + first 2 content items together to avoid
+        # an orphan heading at bottom of a page
+        keep_count = min(4, len(body_items))
+        story.append(KeepTogether(body_items[:keep_count]))
+        for item in body_items[keep_count:]:
             story.append(item)
-        story.append(Spacer(1, 8))
+        story.append(Spacer(1, 12))
 
     # ── Guidelines Applied appendix ────────────────────────────────────────
     story.append(HRFlowable(width="100%", thickness=1, color=C_BLUE_LIGHT, spaceBefore=16, spaceAfter=8))
@@ -417,6 +961,10 @@ def generate_report(review_result: dict) -> bytes:
 
     except Exception:
         story.append(Paragraph("Guidelines metadata could not be loaded.", body_style))
+
+    # ── Author Revision Report (structured action table) ───────────────────
+    _build_author_revision_report(review_result, story, styles,
+                                  h2_style, h3_style, body_style, label_style, value_style)
 
     # ── Footer ─────────────────────────────────────────────────────────────
     story.append(Spacer(1, 20))
