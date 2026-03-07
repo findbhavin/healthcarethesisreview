@@ -787,11 +787,25 @@ async function submitReview() {
   if (journalTier) fd.append('journal_tier', journalTier);
   if (journalName) fd.append('journal_name', journalName);
 
-  try {
-    const resp = await fetch('/review', { method: 'POST', body: fd });
+  // SSE streaming with auto-reconnect on network drops
+  // (handles phone screen-lock disconnects gracefully)
+  let pendingReviewId = null;
+  let reviewDone = false;
+  const MAX_RECONNECT_ATTEMPTS = 6;
+  const RECONNECT_DELAYS = [2000, 4000, 8000, 12000, 20000, 30000];
+
+  async function streamFromServer(formData) {
+    const resp = await fetch('/review', { method: 'POST', body: formData });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));
       throw new Error(err.error || `Server error ${resp.status}`);
+    }
+    // Capture review_id from response header BEFORE reading body.
+    // This lets us reconnect/poll if the stream drops before 'done' arrives.
+    const headerReviewId = resp.headers.get('X-Review-Id');
+    if (headerReviewId) {
+      pendingReviewId = headerReviewId;
+      currentReviewId = headerReviewId;
     }
 
     const reader  = resp.body.getReader();
@@ -802,7 +816,6 @@ async function submitReview() {
       const { done, value } = await reader.read();
       if (done) break;
       buf += decoder.decode(value, { stream: true });
-
       const lines = buf.split('\n');
       buf = lines.pop();
 
@@ -818,6 +831,7 @@ async function submitReview() {
           livePreview.scrollTop   = livePreview.scrollHeight;
 
         } else if (evt.type === 'done') {
+          reviewDone = true;
           currentReviewId = evt.review_id;
           clearStepTimers(); markStepsDone();
           setTimeout(() => {
@@ -830,11 +844,75 @@ async function submitReview() {
         }
       }
     }
+  }
 
+  async function pollForResult(reviewId) {
+    // Show reconnect status in the analyzing panel
+    const stepEls = document.querySelectorAll('.step-item');
+    stepEls.forEach(el => el.style.opacity = '0.5');
+
+    const reconnectMsg = document.createElement('div');
+    reconnectMsg.id = 'reconnectMsg';
+    reconnectMsg.style.cssText = 'color:#ffb020;text-align:center;margin:16px 0;font-weight:600';
+    reconnectMsg.textContent = 'Connection lost. Checking review status…';
+    const ap = document.getElementById('analyzingPanel');
+    ap.appendChild(reconnectMsg);
+
+    for (let attempt = 0; attempt < MAX_RECONNECT_ATTEMPTS; attempt++) {
+      await new Promise(r => setTimeout(r, RECONNECT_DELAYS[attempt] || 30000));
+
+      reconnectMsg.textContent = `Reconnecting… (attempt ${attempt + 1}/${MAX_RECONNECT_ATTEMPTS})`;
+
+      let pollData;
+      try {
+        const pollResp = await fetch(`/review/${reviewId}/poll`);
+        pollData = await pollResp.json();
+      } catch { continue; }
+
+      if (pollData.status === 'done') {
+        reviewDone = true;
+        // Update live preview with full text from server
+        if (pollData.accumulated_text) {
+          fullReviewText = pollData.accumulated_text;
+        }
+        clearStepTimers(); markStepsDone();
+        reconnectMsg.remove();
+        setTimeout(() => {
+          document.getElementById('analyzingPanel').classList.remove('visible');
+          renderReport({ ...pollData, type: 'done' });
+        }, 400);
+        return true;
+      }
+
+      if (pollData.status === 'running' && pollData.accumulated_text) {
+        fullReviewText = pollData.accumulated_text;
+        livePreview.textContent = fullReviewText;
+        livePreview.classList.add('visible');
+        reconnectMsg.textContent = `Still processing… (${fullReviewText.length.toLocaleString()} chars received)`;
+      }
+    }
+
+    // All retries exhausted
+    reconnectMsg.remove();
+    return false;
+  }
+
+  try {
+    await streamFromServer(fd);
   } catch (err) {
-    clearStepTimers();
-    document.getElementById('analyzingPanel').classList.remove('visible');
-    showError('Review Failed', err.message);
+    if (!reviewDone && pendingReviewId) {
+      // Network dropped mid-stream — try polling instead of showing hard error
+      const recovered = await pollForResult(pendingReviewId);
+      if (!recovered) {
+        clearStepTimers();
+        document.getElementById('analyzingPanel').classList.remove('visible');
+        showError('Review Failed', 'Connection lost and could not reconnect. Please try again.');
+      }
+    } else if (!reviewDone) {
+      clearStepTimers();
+      document.getElementById('analyzingPanel').classList.remove('visible');
+      showError('Review Failed', err.message || 'Network error. Please check your connection.');
+    }
   } finally {
     document.getElementById('submitBtn').disabled = false;
     document.getElementById('submitBtn').textContent = '🔍 Run Review';
