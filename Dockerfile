@@ -21,6 +21,7 @@ COPY report_generator.py .
 COPY gcs_uploader.py .
 COPY index.html .
 COPY guidelines.html .
+COPY admin.html .
 
 # Copy guidelines package (required by review_agent and report_generator)
 COPY guidelines/ ./guidelines/
