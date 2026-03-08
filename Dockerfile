@@ -23,6 +23,13 @@ COPY index.html .
 COPY guidelines.html .
 COPY admin.html .
 
+# Admin credentials — required for /admin login.
+# Note: password changes made via the admin UI write to this file inside the
+# running container and are lost on the next deployment. For persistent
+# credentials across deployments, mount admin_config.json from a Cloud
+# Storage bucket or use Cloud Run's Secret Manager integration.
+COPY admin_config.json .
+
 # Copy guidelines package (required by review_agent and report_generator)
 COPY guidelines/ ./guidelines/
 

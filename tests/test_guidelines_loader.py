@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from guidelines.guidelines_loader import (
     build_system_prompt,
+    get_full_guidelines,
     get_metadata,
     get_changelog,
     get_journal_list,
@@ -103,6 +104,139 @@ class TestGuidelinesContent(unittest.TestCase):
 
     def test_credit_taxonomy_mentioned(self):
         self.assertIn("CRediT", self.prompt)
+
+
+class TestGetFullGuidelines(unittest.TestCase):
+    """Tests for get_full_guidelines() — the structured JSON payload used by the UI."""
+
+    def setUp(self):
+        self.data = get_full_guidelines()
+
+    # ── Top-level structure ────────────────────────────────────────────────
+
+    def test_returns_dict(self):
+        self.assertIsInstance(self.data, dict)
+
+    def test_has_metadata_key(self):
+        self.assertIn("metadata", self.data)
+
+    def test_has_stages_key(self):
+        self.assertIn("stages", self.data)
+
+    def test_has_journals_key(self):
+        self.assertIn("journals", self.data)
+
+    def test_has_changelog_key(self):
+        self.assertIn("changelog", self.data)
+
+    def test_has_role_key(self):
+        self.assertIn("role", self.data)
+        self.assertIsInstance(self.data["role"], str)
+        self.assertGreater(len(self.data["role"]), 50)
+
+    # ── Stages ────────────────────────────────────────────────────────────
+
+    def test_stages_is_list(self):
+        self.assertIsInstance(self.data["stages"], list)
+
+    def test_eight_stages_present(self):
+        self.assertEqual(len(self.data["stages"]), 8,
+                         f"Expected 8 stages, got {len(self.data['stages'])}")
+
+    def test_stages_sorted_by_number(self):
+        numbers = [int(s["number"]) for s in self.data["stages"]]
+        self.assertEqual(numbers, sorted(numbers))
+
+    def test_each_stage_has_required_fields(self):
+        required = ("key", "number", "name", "description", "checks",
+                    "weight", "max_score", "score_rubric")
+        for stage in self.data["stages"]:
+            for field in required:
+                self.assertIn(field, stage,
+                              f"Stage {stage.get('number')} missing field '{field}'")
+
+    def test_stage_weights_sum_to_100(self):
+        total = sum(s["weight"] for s in self.data["stages"])
+        self.assertEqual(total, 100,
+                         f"Stage weights sum to {total}, expected 100")
+
+    def test_stage_8_weight_is_zero(self):
+        stage_8 = next(s for s in self.data["stages"] if s["number"] == "8")
+        self.assertEqual(stage_8["weight"], 0,
+                         "Stage 8 is derived — weight should be 0")
+
+    def test_stage_3_is_highest_weight(self):
+        """Methodology (Stage 3) carries 25% — the highest single weight."""
+        stage_3 = next(s for s in self.data["stages"] if s["number"] == "3")
+        max_weight = max(s["weight"] for s in self.data["stages"])
+        self.assertEqual(stage_3["weight"], max_weight)
+
+    def test_each_stage_has_checks_list(self):
+        for stage in self.data["stages"]:
+            self.assertIsInstance(stage["checks"], list,
+                                  f"Stage {stage['number']} checks must be a list")
+            if stage["number"] != "8":  # Stage 8 may have no checks
+                self.assertGreater(len(stage["checks"]), 0,
+                                   f"Stage {stage['number']} has no checks")
+
+    def test_score_rubric_is_dict(self):
+        for stage in self.data["stages"]:
+            self.assertIsInstance(stage["score_rubric"], dict,
+                                  f"Stage {stage['number']} score_rubric must be a dict")
+
+    def test_score_rubric_nonempty_for_scored_stages(self):
+        for stage in self.data["stages"]:
+            if stage["weight"] > 0:
+                self.assertGreater(len(stage["score_rubric"]), 0,
+                                   f"Stage {stage['number']} (weight {stage['weight']}%) has empty rubric")
+
+    def test_max_score_is_10_for_scored_stages(self):
+        """Stage 8 is derived (weight=0, max_score=0); all other stages score out of 10."""
+        for stage in self.data["stages"]:
+            if stage["weight"] > 0:
+                self.assertEqual(stage["max_score"], 10,
+                                 f"Stage {stage['number']} max_score should be 10")
+
+    # ── Journals ──────────────────────────────────────────────────────────
+
+    def test_journals_is_list(self):
+        self.assertIsInstance(self.data["journals"], list)
+
+    def test_njcm_journal_present(self):
+        keys = [j["key"] for j in self.data["journals"]]
+        self.assertIn("NJCM", keys)
+
+    def test_each_journal_has_required_fields(self):
+        required = ("key", "full_name", "scope", "reference_style",
+                    "word_limits", "required_sections")
+        for journal in self.data["journals"]:
+            for field in required:
+                self.assertIn(field, journal,
+                              f"Journal {journal.get('key')} missing field '{field}'")
+
+    def test_njcm_has_vancouver_style(self):
+        njcm = next(j for j in self.data["journals"] if j["key"] == "NJCM")
+        self.assertEqual(njcm["reference_style"], "Vancouver")
+
+    def test_njcm_word_limits_are_positive(self):
+        njcm = next(j for j in self.data["journals"] if j["key"] == "NJCM")
+        for article_type, limit in njcm["word_limits"].items():
+            self.assertGreater(limit, 0,
+                               f"NJCM word limit for '{article_type}' must be positive")
+
+    # ── Changelog ─────────────────────────────────────────────────────────
+
+    def test_changelog_is_list(self):
+        self.assertIsInstance(self.data["changelog"], list)
+
+    def test_changelog_has_entries(self):
+        self.assertGreater(len(self.data["changelog"]), 0)
+
+    def test_changelog_entries_have_version_date_changes(self):
+        for entry in self.data["changelog"]:
+            for field in ("version", "date", "changes"):
+                self.assertIn(field, entry,
+                              f"Changelog entry missing '{field}'")
 
 
 if __name__ == "__main__":
