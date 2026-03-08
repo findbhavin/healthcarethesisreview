@@ -663,34 +663,6 @@ def admin_logout():
     return jsonify({"logged_out": True}), 200
 
 
-@app.route("/admin/guidelines/raw", methods=["GET"])
-@_admin_required
-def admin_guidelines_raw():
-    """Return the raw YAML text of review_guidelines.yaml."""
-    try:
-        return jsonify({"yaml": get_guidelines_raw()}), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/admin/guidelines/save", methods=["POST"])
-@_admin_required
-def admin_guidelines_save():
-    """
-    Validate and save a new guidelines YAML.
-    JSON body: {"yaml": "...raw yaml text..."}
-    """
-    data = request.get_json(silent=True) or {}
-    raw_yaml = data.get("yaml", "")
-    if not raw_yaml.strip():
-        return jsonify({"saved": False, "errors": ["Empty YAML provided."]}), 400
-
-    result = save_guidelines_yaml(raw_yaml)
-    status = 200 if result.get("saved") else 422
-    logger.info(f"Admin guidelines save: saved={result.get('saved')}")
-    return jsonify(result), status
-
-
 @app.route("/admin/credentials", methods=["POST"])
 @_admin_required
 def admin_change_credentials():
