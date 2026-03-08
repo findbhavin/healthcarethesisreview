@@ -476,6 +476,131 @@ def _build_scorecard(review_result: dict, styles) -> list:
     return story
 
 
+def _build_section_findings_table(review_result: dict, styles) -> list:
+    """
+    Build a compact "Section-by-Section Review Summary" table.
+
+    Columns: Stage | Section Finding | Priority | Score
+    One row per MAJOR / MINOR / SUGGESTION item extracted from the review text.
+    Placed after the scorecard, before the detailed stage bodies.
+    """
+    review_text  = review_result.get("review_text", "")
+    stage_scores = review_result.get("stage_scores") or {}
+    items = _extract_revision_items(review_text)
+    if not items:
+        return []
+
+    h2_style = ParagraphStyle(
+        "SFT_H2", parent=styles["Heading2"],
+        textColor=C_BLUE, fontSize=12, spaceBefore=14, spaceAfter=6,
+    )
+    cell_hdr = ParagraphStyle(
+        "SFT_Hdr", parent=styles["Normal"],
+        fontSize=9, fontName="Helvetica-Bold", textColor=C_WHITE,
+    )
+    cell_sml = ParagraphStyle(
+        "SFT_Sml", parent=styles["Normal"],
+        fontSize=8.5, leading=12,
+    )
+    cell_pri_maj = ParagraphStyle("SFT_Maj", parent=styles["Normal"],
+                                   fontSize=8, fontName="Helvetica-Bold", textColor=C_MAJOR)
+    cell_pri_min = ParagraphStyle("SFT_Min", parent=styles["Normal"],
+                                   fontSize=8, fontName="Helvetica-Bold", textColor=C_AMBER)
+    cell_pri_sug = ParagraphStyle("SFT_Sug", parent=styles["Normal"],
+                                   fontSize=8, fontName="Helvetica-Bold", textColor=C_SUGGEST)
+    cell_sc  = ParagraphStyle(
+        "SFT_Sc", parent=styles["Normal"],
+        fontSize=8, alignment=TA_CENTER,
+    )
+
+    def pri_style(p):
+        if p == "MAJOR":      return cell_pri_maj
+        if p == "MINOR":      return cell_pri_min
+        return cell_pri_sug
+
+    def pri_color(p):
+        if p == "MAJOR":      return C_MAJOR
+        if p == "MINOR":      return C_AMBER
+        if p == "SUGGESTION": return C_SUGGEST
+        return C_DARK
+
+    # stage label → (short label, stage number)
+    _label_to_num = {
+        "Stage 1": 1, "Stage 2": 2, "Stage 3": 3, "Stage 4": 4,
+        "Stage 5": 5, "Stage 6": 6, "Stage 7": 7, "Stage 8": 8,
+    }
+
+    story = []
+    story.append(Paragraph("Section-by-Section Review Summary", h2_style))
+    story.append(HRFlowable(width="100%", thickness=0.8, color=C_BLUE_LIGHT, spaceAfter=6))
+
+    # Header row
+    tbl_data = [[
+        Paragraph("<b>Stage</b>", cell_hdr),
+        Paragraph("<b>Finding / Comment</b>", cell_hdr),
+        Paragraph("<b>Priority</b>", cell_hdr),
+        Paragraph("<b>Stage Score</b>", cell_hdr),
+    ]]
+
+    prev_stage = None
+    for item in items:
+        sec_label = item["section"]       # e.g. "Stage 3 — Methodology"
+        priority  = item["priority"]
+        comment   = item["comment"]
+
+        # Extract stage number from the label
+        stage_num = None
+        for lbl, num in _label_to_num.items():
+            if sec_label.startswith(lbl):
+                stage_num = num
+                break
+
+        # Score cell — show only on first row for each stage (row-span look)
+        if stage_num and stage_num != prev_stage:
+            sc = stage_scores.get(stage_num)
+            if sc is not None and stage_num != 8:
+                sc_color = _score_color(sc)
+                score_text = f'<font color="{sc_color.hexval()}"><b>{sc}/10</b></font>'
+            else:
+                score_text = "—"
+            prev_stage = stage_num
+        else:
+            score_text = ""
+
+        # Stage short label
+        short = sec_label.split(" — ", 1)[-1] if " — " in sec_label else sec_label
+
+        tbl_data.append([
+            Paragraph(_esc(short), cell_sml),
+            Paragraph(_esc(comment), cell_sml),
+            Paragraph(
+                f'<font color="{pri_color(priority).hexval()}"><b>{priority}</b></font>',
+                pri_style(priority),
+            ),
+            Paragraph(score_text, cell_sc),
+        ])
+
+    # Table — col widths to fit A4 body (15.5 cm usable)
+    col_w = [3.5*cm, 8.0*cm, 2.0*cm, 2.0*cm]
+    tbl = Table(tbl_data, colWidths=col_w, repeatRows=1)
+    tbl.setStyle(TableStyle([
+        ("BACKGROUND",     (0, 0), (-1, 0), C_BLUE),
+        ("TEXTCOLOR",      (0, 0), (-1, 0), C_WHITE),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [C_WHITE, C_BLUE_BG]),
+        ("GRID",           (0, 0), (-1, -1), 0.3, colors.HexColor("#B0C8E0")),
+        ("VALIGN",         (0, 0), (-1, -1), "TOP"),
+        ("ALIGN",          (2, 0), (2, -1), "CENTER"),
+        ("ALIGN",          (3, 0), (3, -1), "CENTER"),
+        ("TOPPADDING",     (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING",  (0, 0), (-1, -1), 5),
+        ("LEFTPADDING",    (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING",   (0, 0), (-1, -1), 6),
+    ]))
+    story.append(tbl)
+    story.append(Spacer(1, 14))
+    return story
+
+
 def _extract_revision_items(review_text: str) -> list[dict]:
     """
     Parse the review text and extract all actionable findings into a flat list:
@@ -850,8 +975,11 @@ def generate_report(review_result: dict) -> bytes:
     scorecard_items = _build_scorecard(review_result, styles)
     story.extend(scorecard_items)
 
+    # ── Section-by-section findings summary table ──────────────────────────
+    story.extend(_build_section_findings_table(review_result, styles))
+
     # ── Stage sections ─────────────────────────────────────────────────────
-    story.append(Paragraph("Review Findings", h2_style))
+    story.append(Paragraph("Detailed Review Findings", h2_style))
     story.append(HRFlowable(width="100%", thickness=0.8, color=C_BLUE_LIGHT, spaceAfter=8))
 
     stages = _split_into_stages(review_result.get("review_text",""))
