@@ -96,6 +96,109 @@
     border: 1px solid #2a3050; border-radius: 8px;
     tab-size: 2; white-space: pre;
   }
+
+  /* ── View Toggle ────────────────────────────────────────── */
+  .view-toggle {
+    display: inline-flex; border: 1px solid #2a3050; border-radius: 8px;
+    overflow: hidden; margin-bottom: 14px;
+  }
+  .view-toggle-btn {
+    padding: 8px 16px; font-size: 13px; font-weight: 600;
+    cursor: pointer; border: none; background: transparent;
+    color: #7a8aa8; transition: background .2s, color .2s;
+  }
+  .view-toggle-btn.active { background: #1A5C96; color: #fff; }
+  .view-toggle-btn:not(.active):hover { background: #181c27; color: #e8eaf0; }
+
+  /* ── Visual Preview ────────────────────────────────────── */
+  #visualPreview { display: none; }
+  .preview-meta {
+    background: #181c27; border: 1px solid #2a3050; border-radius: 10px;
+    padding: 16px 20px; margin-bottom: 18px;
+    display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start;
+  }
+  .preview-meta-item { font-size: 13px; }
+  .preview-meta-item .label { color: #7a8aa8; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+  .preview-meta-item .value { color: #e8eaf0; font-weight: 600; margin-top: 2px; }
+
+  .stage-card {
+    background: #181c27; border: 1px solid #2a3050; border-radius: 12px;
+    margin-bottom: 14px; overflow: hidden;
+  }
+  .stage-header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 14px 18px; cursor: pointer;
+    user-select: none; transition: background .15s;
+  }
+  .stage-header:hover { background: #1e2438; }
+  .stage-num {
+    width: 32px; height: 32px; border-radius: 50%;
+    background: #1A5C96; color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: 700; flex-shrink: 0;
+  }
+  .stage-title { flex: 1; font-size: 14px; font-weight: 600; color: #e8eaf0; }
+  .stage-weight {
+    padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 700;
+    background: #0a1c30; color: #90b8e0; border: 1px solid #1A5C96;
+  }
+  .stage-weight.high { background: #0a2010; color: #3dd68c; border-color: #3dd68c; }
+  .stage-weight.zero { background: #1c1c1c; color: #7a8aa8; border-color: #2a3050; }
+  .stage-chevron { color: #7a8aa8; font-size: 12px; transition: transform .2s; }
+  .stage-card.open .stage-chevron { transform: rotate(90deg); }
+
+  .stage-body { display: none; border-top: 1px solid #2a3050; padding: 18px; }
+  .stage-card.open .stage-body { display: block; }
+
+  .stage-desc { color: #90b8e0; font-size: 13px; line-height: 1.6; margin-bottom: 14px; }
+  .stage-section-title {
+    font-size: 11px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .08em; color: #7a8aa8; margin-bottom: 8px;
+  }
+  .check-list { list-style: none; margin-bottom: 14px; }
+  .check-list li {
+    font-size: 13px; color: #c8d4e8; padding: 5px 0 5px 20px;
+    border-bottom: 1px solid #1e2438; position: relative; line-height: 1.5;
+  }
+  .check-list li:last-child { border-bottom: none; }
+  .check-list li::before { content: "✓"; position: absolute; left: 0; color: #1A5C96; font-weight: 700; }
+
+  .rubric-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 14px; }
+  .rubric-table th {
+    background: #0d1526; color: #7a8aa8; font-weight: 600;
+    padding: 7px 10px; text-align: left; font-size: 11px; text-transform: uppercase;
+  }
+  .rubric-table td { padding: 7px 10px; border-bottom: 1px solid #1e2438; color: #c8d4e8; }
+  .rubric-table tr:last-child td { border-bottom: none; }
+  .score-badge {
+    display: inline-block; padding: 2px 8px; border-radius: 6px;
+    font-weight: 700; font-size: 11px; white-space: nowrap;
+  }
+  .score-hi  { background: #0a2010; color: #3dd68c; }
+  .score-mid { background: #1c2800; color: #aacf00; }
+  .score-low { background: #2a1800; color: #f0a000; }
+  .score-crit{ background: #2a1010; color: #ff5c6a; }
+
+  .instruction-box {
+    background: #0a1c30; border-left: 3px solid #1A5C96;
+    border-radius: 0 8px 8px 0; padding: 10px 14px;
+    font-size: 13px; color: #90b8e0; line-height: 1.6;
+  }
+
+  .wrs-banner {
+    background: linear-gradient(135deg, #0d1a2e 0%, #0f2040 100%);
+    border: 1px solid #1A5C96; border-radius: 12px;
+    padding: 16px 20px; margin-bottom: 18px;
+    display: flex; flex-wrap: wrap; gap: 16px; align-items: center;
+  }
+  .wrs-banner .formula { font-size: 12px; color: #90b8e0; font-family: 'Courier New', monospace; }
+  .wrs-bar-wrap { flex: 1; min-width: 200px; }
+  .wrs-stage-row { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+  .wrs-stage-name { font-size: 11px; color: #7a8aa8; width: 160px; flex-shrink: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .wrs-bar-bg { flex: 1; background: #0d1526; border-radius: 4px; height: 10px; overflow: hidden; }
+  .wrs-bar-fill { height: 100%; border-radius: 4px; background: #1A5C96; transition: width .4s; }
+  .wrs-bar-fill.high { background: #3dd68c; }
+  .wrs-pct { font-size: 11px; color: #7a8aa8; width: 36px; text-align: right; flex-shrink: 0; }
   .status-bar {
     margin-top: 12px; padding: 10px 14px; border-radius: 8px;
     font-size: 13px; display: none;
@@ -271,14 +374,37 @@
 
   <!-- ── Guidelines Editor Tab ──────────────────────────────── -->
   <div class="tab-panel active" id="tab-editor">
-    <div class="editor-toolbar">
-      <button class="btn btn-ghost" onclick="loadYaml()">↺ Reload from Disk</button>
-      <button class="btn btn-warn" onclick="validateYaml()">✓ Validate</button>
-      <div class="spacer"></div>
-      <button class="btn btn-success" onclick="saveYaml()">💾 Save &amp; Reload</button>
+    <!-- View toggle -->
+    <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:14px;">
+      <div class="view-toggle">
+        <button class="view-toggle-btn active" id="toggleRaw" onclick="switchView('raw')">📝 Raw YAML</button>
+        <button class="view-toggle-btn" id="toggleVisual" onclick="switchView('visual')">👁 Visual Preview</button>
+      </div>
+      <span style="font-size:12px; color:#7a8aa8;">Visual preview renders the saved guidelines in a readable format.</span>
     </div>
-    <textarea id="yamlEditor" spellcheck="false" placeholder="Loading…"></textarea>
-    <div id="editorStatus" class="status-bar"></div>
+
+    <!-- Raw YAML editor (default) -->
+    <div id="rawEditor">
+      <div class="editor-toolbar">
+        <button class="btn btn-ghost" onclick="loadYaml()">↺ Reload from Disk</button>
+        <button class="btn btn-warn" onclick="validateYaml()">✓ Validate</button>
+        <div class="spacer"></div>
+        <button class="btn btn-success" onclick="saveYaml()">💾 Save &amp; Reload</button>
+      </div>
+      <textarea id="yamlEditor" spellcheck="false" placeholder="Loading…"></textarea>
+      <div id="editorStatus" class="status-bar"></div>
+    </div>
+
+    <!-- Visual preview (shown when toggled) -->
+    <div id="visualPreview">
+      <div style="display:flex; gap:10px; margin-bottom:16px; flex-wrap:wrap; align-items:center;">
+        <button class="btn btn-ghost" onclick="loadVisualPreview()">↺ Refresh Preview</button>
+        <span id="previewStatus" style="font-size:13px; color:#7a8aa8;"></span>
+      </div>
+      <div id="previewContent">
+        <p style="color:#7a8aa8; font-size:14px; padding:20px 0;">Loading preview…</p>
+      </div>
+    </div>
   </div>
 
   <!-- ── AI Rule Update Tab ────────────────────────────────── -->
@@ -889,6 +1015,164 @@ function closeModal() {
 document.getElementById('yamlModal').addEventListener('click', function(e) {
   if (e.target === this) closeModal();
 });
+
+// ── Visual Preview ───────────────────────────────────────────────
+
+function switchView(mode) {
+  const rawDiv  = document.getElementById('rawEditor');
+  const vizDiv  = document.getElementById('visualPreview');
+  const btnRaw  = document.getElementById('toggleRaw');
+  const btnViz  = document.getElementById('toggleVisual');
+
+  if (mode === 'raw') {
+    rawDiv.style.display = 'block';
+    vizDiv.style.display = 'none';
+    btnRaw.classList.add('active');
+    btnViz.classList.remove('active');
+  } else {
+    rawDiv.style.display = 'none';
+    vizDiv.style.display = 'block';
+    btnRaw.classList.remove('active');
+    btnViz.classList.add('active');
+    loadVisualPreview();
+  }
+}
+
+async function loadVisualPreview() {
+  const container = document.getElementById('previewContent');
+  const status    = document.getElementById('previewStatus');
+  container.innerHTML = '<p style="color:#7a8aa8;font-size:14px;padding:20px 0;">Loading…</p>';
+  status.textContent  = '';
+
+  try {
+    const r = await fetch('/guidelines/full');
+    if (r.status === 401) { doLogout(); return; }
+    const d = await r.json();
+    container.innerHTML = buildPreviewHTML(d);
+    status.textContent = '✓ Showing live guidelines';
+    status.style.color = '#3dd68c';
+  } catch(e) {
+    container.innerHTML = `<p style="color:#ff5c6a;padding:20px 0;">Error loading preview: ${esc(e.message)}</p>`;
+    status.textContent = '';
+  }
+}
+
+function buildPreviewHTML(data) {
+  const meta   = data.metadata || {};
+  const stages = data.stages   || {};
+  let html = '';
+
+  // ── Metadata banner ──────────────────────────────────────────
+  html += `<div class="preview-meta">
+    <div class="preview-meta-item">
+      <div class="label">Journal</div>
+      <div class="value">${esc(meta.journal_name || '—')}</div>
+    </div>
+    <div class="preview-meta-item">
+      <div class="label">Version</div>
+      <div class="value">v${esc(meta.version || '—')}</div>
+    </div>
+    <div class="preview-meta-item">
+      <div class="label">Last Updated</div>
+      <div class="value">${esc(meta.last_updated || '—')}</div>
+    </div>
+    <div class="preview-meta-item">
+      <div class="label">Maintained By</div>
+      <div class="value">${esc(meta.maintained_by || '—')}</div>
+    </div>
+    <div class="preview-meta-item">
+      <div class="label">Contact</div>
+      <div class="value">${esc(meta.contact || '—')}</div>
+    </div>
+  </div>`;
+
+  // ── Weighted Review Score bar chart ─────────────────────────
+  const stageKeys = Object.keys(stages).sort();
+  const maxW = Math.max(...stageKeys.map(k => stages[k].weight || 0), 1);
+  html += `<div class="wrs-banner">
+    <div>
+      <div style="font-size:12px;color:#7a8aa8;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px;">Weighted Review Score</div>
+      <div class="formula">WRS = Σ(score_i × weight_i) / 10</div>
+    </div>
+    <div class="wrs-bar-wrap">`;
+  stageKeys.forEach(k => {
+    const s = stages[k];
+    const w = s.weight || 0;
+    const pct = Math.round((w / maxW) * 100);
+    const cls = w >= 20 ? 'high' : '';
+    html += `<div class="wrs-stage-row">
+      <div class="wrs-stage-name">${esc(s.name || k)}</div>
+      <div class="wrs-bar-bg"><div class="wrs-bar-fill ${cls}" style="width:${pct}%"></div></div>
+      <div class="wrs-pct">${w}%</div>
+    </div>`;
+  });
+  html += `</div></div>`;
+
+  // ── Stage cards ──────────────────────────────────────────────
+  stageKeys.forEach((k, idx) => {
+    const s   = stages[k];
+    const w   = s.weight || 0;
+    const num = idx + 1;
+    const wCls = w === 0 ? 'zero' : w >= 20 ? 'high' : '';
+    const wLabel = w === 0 ? 'Derived' : `${w}%`;
+
+    // Open first two cards by default
+    const open = idx < 2 ? ' open' : '';
+
+    html += `<div class="stage-card${open}" id="sc-${k}" onclick="toggleStageCard('${k}')">
+      <div class="stage-header">
+        <div class="stage-num">${num}</div>
+        <div class="stage-title">${esc(s.name || k)}</div>
+        <div class="stage-weight ${wCls}">${wLabel}</div>
+        <div class="stage-chevron">▶</div>
+      </div>
+      <div class="stage-body" onclick="event.stopPropagation()">`;
+
+    if (s.description) {
+      html += `<div class="stage-desc">${esc(s.description.trim())}</div>`;
+    }
+
+    // Checks
+    const checks = s.checks || s.criteria || [];
+    if (checks.length) {
+      html += `<div class="stage-section-title">Checklist</div>
+        <ul class="check-list">${checks.map(c => `<li>${esc(c)}</li>`).join('')}</ul>`;
+    }
+
+    // Score rubric table
+    const rubric = s.score_rubric || {};
+    const rubricKeys = Object.keys(rubric);
+    if (rubricKeys.length) {
+      html += `<div class="stage-section-title">Scoring Rubric</div>
+        <table class="rubric-table">
+          <thead><tr><th>Score</th><th>Criteria</th></tr></thead>
+          <tbody>`;
+      rubricKeys.forEach(range => {
+        const lo = parseInt(range.split('-')[0], 10);
+        const cls = lo >= 9 ? 'score-hi' : lo >= 7 ? 'score-mid' : lo >= 5 ? 'score-low' : 'score-crit';
+        html += `<tr>
+          <td><span class="score-badge ${cls}">${esc(range)}</span></td>
+          <td>${esc(rubric[range])}</td>
+        </tr>`;
+      });
+      html += `</tbody></table>`;
+    }
+
+    // Instruction
+    if (s.instruction) {
+      html += `<div class="stage-section-title">Instruction</div>
+        <div class="instruction-box">${esc(s.instruction.trim())}</div>`;
+    }
+
+    html += `</div></div>`;  // close stage-body, stage-card
+  });
+
+  return html;
+}
+
+function toggleStageCard(key) {
+  document.getElementById('sc-' + key).classList.toggle('open');
+}
 </script>
 </body>
 </html>
