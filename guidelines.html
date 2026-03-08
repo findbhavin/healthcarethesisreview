@@ -132,6 +132,25 @@
     }
     .stage-header:hover { background: #f5f9ff; }
 
+    .stage-weight-badge {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 2px;
+      flex-shrink: 0;
+      text-align: center;
+    }
+    .weight-circle {
+      width: 48px; height: 48px;
+      border-radius: 50%;
+      border: 3px solid #1a5c96;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 700; font-size: 0.85rem;
+      color: #1a5c96;
+      background: #f0f7ff;
+    }
+    .weight-label { font-size: 0.68rem; color: #889; text-transform: uppercase; letter-spacing: 0.03em; }
+
     .stage-num {
       width: 36px; height: 36px;
       border-radius: 50%;
@@ -215,6 +234,101 @@
       margin-top: 14px;
       line-height: 1.55;
     }
+
+    /* ── Score rubric ── */
+    .rubric-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 14px;
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: #1a5c96;
+      cursor: pointer;
+      user-select: none;
+      padding: 4px 0;
+    }
+    .rubric-toggle:hover { text-decoration: underline; }
+    .rubric-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 8px;
+      font-size: 0.85rem;
+      border-radius: 6px;
+      overflow: hidden;
+      border: 1px solid #dce8f5;
+    }
+    .rubric-table th {
+      background: #e8eef7;
+      text-align: left;
+      padding: 7px 12px;
+      color: #2a3a5a;
+      font-weight: 700;
+    }
+    .rubric-table td {
+      padding: 7px 12px;
+      border-bottom: 1px solid #f0f4f8;
+      vertical-align: top;
+    }
+    .rubric-table tr:last-child td { border-bottom: none; }
+    .rubric-score {
+      font-weight: 700;
+      white-space: nowrap;
+      font-family: monospace;
+      font-size: 0.88rem;
+    }
+    .rubric-score.high  { color: #0a6630; }
+    .rubric-score.mid   { color: #7a4a00; }
+    .rubric-score.low   { color: #8a2000; }
+    .rubric-score.crit  { color: #7a0000; }
+
+    /* ── WRS Formula card ── */
+    .wrs-card {
+      background: #fff;
+      border-radius: 10px;
+      border: 1px solid #dce8f5;
+      padding: 20px 24px;
+      margin-bottom: 28px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.07);
+    }
+    .wrs-card h3 {
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: #1a5c96;
+      margin-bottom: 12px;
+    }
+    .wrs-formula {
+      font-family: monospace;
+      font-size: 0.92rem;
+      background: #f0f7ff;
+      border: 1px solid #dce8f5;
+      border-radius: 6px;
+      padding: 10px 16px;
+      color: #1a2e4a;
+      line-height: 1.7;
+    }
+    .weight-bar-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 4px;
+      font-size: 0.82rem;
+    }
+    .weight-bar-label { width: 200px; flex-shrink: 0; color: #445; }
+    .weight-bar-track {
+      flex: 1;
+      height: 10px;
+      background: #e8eef7;
+      border-radius: 5px;
+      overflow: hidden;
+    }
+    .weight-bar-fill {
+      height: 100%;
+      border-radius: 5px;
+      background: #1a5c96;
+      transition: width 0.4s;
+    }
+    .weight-bar-pct { width: 32px; text-align: right; font-weight: 700; color: #1a5c96; font-size: 0.8rem; }
 
     .decision-table {
       width: 100%;
@@ -409,6 +523,12 @@
       <!-- filled by JS -->
     </div>
 
+    <!-- WRS Formula -->
+    <div class="section-title">&#x2696;&#xFE0F; Weighted Review Score (WRS)</div>
+    <div class="wrs-card" id="wrs-card">
+      <!-- filled by JS -->
+    </div>
+
     <!-- Stage 1-8 -->
     <div class="section-title">&#x1F4CB; 8-Stage Review Framework</div>
     <div class="stages-grid" id="stages-grid">
@@ -495,6 +615,37 @@
     document.getElementById("footer-ver").textContent = meta.version || "—";
   }
 
+  function rubricClass(range) {
+    const lo = parseInt((range || "0").split("-")[0]);
+    if (lo >= 9) return "high";
+    if (lo >= 7) return "mid";
+    if (lo >= 3) return "low";
+    return "crit";
+  }
+
+  function renderWRS(stages) {
+    const card = document.getElementById("wrs-card");
+    const scored = stages.filter(s => s.weight > 0);
+    const formula = scored.map(s => `S${s.number}×${s.weight}`).join(" + ");
+
+    const bars = scored.map(s => `
+      <div class="weight-bar-row">
+        <div class="weight-bar-label">Stage ${esc(s.number)}: ${esc(s.name)}</div>
+        <div class="weight-bar-track"><div class="weight-bar-fill" style="width:${s.weight*4}%"></div></div>
+        <div class="weight-bar-pct">${s.weight}%</div>
+      </div>
+    `).join("");
+
+    card.innerHTML = `
+      <h3>&#x1F4CA; How the Weighted Review Score is calculated</h3>
+      <div class="wrs-formula">WRS = (${formula}) ÷ 10 &nbsp;→&nbsp; expressed as 0–100</div>
+      <div style="margin-top:14px;">${bars}</div>
+      <p style="margin-top:12px;font-size:0.82rem;color:#667;">
+        Stage 8 (Overall Editorial Recommendation) is <strong>derived</strong> from the WRS — it carries no direct weight.
+      </p>
+    `;
+  }
+
   function renderStages(stages) {
     const grid = document.getElementById("stages-grid");
     grid.innerHTML = "";
@@ -538,9 +689,40 @@
              </tbody>
            </table>` : "";
 
+      // Score rubric table (collapsible)
+      const rubricEntries = Object.entries(stage.score_rubric || {});
+      const rubricHtml = rubricEntries.length
+        ? `<div>
+             <div class="rubric-toggle" onclick="this.nextElementSibling.hidden=!this.nextElementSibling.hidden;this.querySelector('.rt-arrow').textContent=this.nextElementSibling.hidden?'▶':'▼';">
+               &#x1F4CB; Score rubric (0–${esc(String(stage.max_score))}) &nbsp;<span class="rt-arrow">▶</span>
+             </div>
+             <div hidden>
+               <table class="rubric-table">
+                 <thead><tr><th>Score</th><th>Meaning</th></tr></thead>
+                 <tbody>
+                   ${rubricEntries.map(([range, desc]) => `
+                     <tr>
+                       <td><span class="rubric-score ${rubricClass(range)}">${esc(range)}/10</span></td>
+                       <td>${esc(desc)}</td>
+                     </tr>`).join("")}
+                 </tbody>
+               </table>
+             </div>
+           </div>` : "";
+
       // Instruction box
       const instrHtml = stage.instruction
         ? `<div class="instruction-box">&#x1F4A1; ${esc(stage.instruction)}</div>` : "";
+
+      // Weight badge (only for scored stages)
+      const weightBadge = stage.weight > 0
+        ? `<div class="stage-weight-badge">
+             <div class="weight-circle">${stage.weight}%</div>
+             <div class="weight-label">weight</div>
+           </div>` : `<div class="stage-weight-badge">
+             <div class="weight-circle" style="border-color:#ccc;color:#aaa;background:#f8f8f8;">—</div>
+             <div class="weight-label">derived</div>
+           </div>`;
 
       const card = document.createElement("div");
       card.className = "stage-card";
@@ -551,10 +733,11 @@
             <div class="stage-title">Stage ${esc(num)}: ${esc(stage.name)}</div>
             ${stage.description ? `<div class="stage-desc">${esc(stage.description)}</div>` : ""}
           </div>
+          ${weightBadge}
           <div class="stage-chevron">&#x25BE;</div>
         </div>
         <div class="stage-body">
-          ${checksHtml}${scopeHtml}${sevHtml}${decHtml}${instrHtml}
+          ${checksHtml}${scopeHtml}${sevHtml}${decHtml}${rubricHtml}${instrHtml}
         </div>
       `;
       // Open Stage 1 by default
@@ -626,6 +809,7 @@
       const data = await resp.json();
 
       renderVersionBar(data.metadata || {});
+      renderWRS(data.stages || []);
       renderStages(data.stages || []);
       renderJournals(data.journals || []);
       renderChangelog(data.changelog || []);
