@@ -123,6 +123,96 @@
   }
   .settings-section h3 { font-size: 15px; color: #e8eaf0; margin-bottom: 16px; }
 
+  /* ── NLP / AI Rule Update ──────────────────────────────── */
+  .nlp-proposal {
+    display: none; margin-top: 20px;
+    border: 1px solid #2a3050; border-radius: 12px; overflow: hidden;
+  }
+  .nlp-proposal.visible { display: block; }
+  .nlp-proposal-header {
+    background: #181c27; padding: 14px 18px;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .nlp-proposal-header h3 { font-size: 14px; color: #e8eaf0; flex: 1; }
+  .nlp-summary {
+    padding: 12px 18px; background: #0a1c30;
+    border-bottom: 1px solid #2a3050;
+    font-size: 13px; color: #90b8e0; line-height: 1.5;
+  }
+  .nlp-yaml-preview {
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 12px; line-height: 1.5;
+    padding: 16px; background: #0c0e16; color: #e8eaf0;
+    max-height: 400px; overflow-y: auto;
+    white-space: pre; tab-size: 2;
+    border: none; width: 100%; resize: vertical;
+    border-bottom: 1px solid #2a3050;
+  }
+  .nlp-actions {
+    padding: 14px 18px; background: #181c27;
+    display: flex; gap: 10px; align-items: center;
+  }
+  .badge-current {
+    display: inline-block; padding: 2px 10px;
+    background: #006600; color: #3dd68c;
+    border-radius: 20px; font-size: 11px; font-weight: 700;
+  }
+  .badge-old {
+    display: inline-block; padding: 2px 10px;
+    background: #1c1c1c; color: #7a8aa8;
+    border-radius: 20px; font-size: 11px;
+  }
+
+  /* ── GCS Version History ───────────────────────────────── */
+  .gcs-toolbar {
+    display: flex; gap: 10px; align-items: center;
+    margin-bottom: 20px; flex-wrap: wrap;
+  }
+  .gcs-status {
+    padding: 6px 14px; border-radius: 20px; font-size: 12px; font-weight: 600;
+  }
+  .gcs-status.on  { background: #0a2010; color: #3dd68c; border: 1px solid #3dd68c; }
+  .gcs-status.off { background: #2a1010; color: #ff5c6a; border: 1px solid #ff5c6a; }
+  .versions-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .versions-table th {
+    background: #1A5C96; color: #fff; text-align: left;
+    padding: 10px 12px;
+  }
+  .versions-table td { padding: 10px 12px; border-bottom: 1px solid #2a3050; }
+  .versions-table tr:nth-child(even) td { background: #181c27; }
+  .versions-table tr:hover td { background: #0d1526; }
+
+  /* ── YAML Preview Modal ────────────────────────────────── */
+  .modal-overlay {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,0.75); z-index: 1000;
+    align-items: center; justify-content: center;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal-box {
+    background: #181c27; border: 1px solid #2a3050;
+    border-radius: 14px; width: 90%; max-width: 820px;
+    max-height: 85vh; display: flex; flex-direction: column;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+  }
+  .modal-header {
+    padding: 16px 20px; border-bottom: 1px solid #2a3050;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .modal-header h3 { flex: 1; font-size: 15px; color: #e8eaf0; }
+  .modal-body { overflow-y: auto; flex: 1; padding: 0; }
+  .modal-body textarea {
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 12px; line-height: 1.5;
+    width: 100%; min-height: 400px; resize: vertical;
+    padding: 16px; background: #0c0e16; color: #e8eaf0;
+    border: none; outline: none; white-space: pre; tab-size: 2;
+  }
+  .modal-footer {
+    padding: 14px 20px; border-top: 1px solid #2a3050;
+    display: flex; gap: 10px; justify-content: flex-end;
+  }
+
   /* ── Toast ────────────────────────────────────────────── */
   #toast {
     position: fixed; bottom: 24px; right: 24px;
@@ -173,6 +263,8 @@
   <!-- Tabs -->
   <div class="tabs">
     <button class="tab-btn active" onclick="showTab('editor', this)">📝 Guidelines Editor</button>
+    <button class="tab-btn" onclick="showTab('nlp', this)">🤖 AI Rule Update</button>
+    <button class="tab-btn" onclick="showTab('versions', this)">☁️ GCS Versions</button>
     <button class="tab-btn" onclick="showTab('changelog', this)">📋 Changelog</button>
     <button class="tab-btn" onclick="showTab('settings', this)">⚙️ Settings</button>
   </div>
@@ -187,6 +279,98 @@
     </div>
     <textarea id="yamlEditor" spellcheck="false" placeholder="Loading…"></textarea>
     <div id="editorStatus" class="status-bar"></div>
+  </div>
+
+  <!-- ── AI Rule Update Tab ────────────────────────────────── -->
+  <div class="tab-panel" id="tab-nlp">
+    <h2 style="font-size:16px; color:#1A5C96; margin-bottom:6px;">AI-Assisted Rule Update</h2>
+    <p style="color:#7a8aa8; font-size:13px; margin-bottom:20px;">
+      Describe a rule change in plain English. Claude will read the current guidelines
+      and propose an updated YAML. Review and apply — or discard.
+    </p>
+
+    <div class="field">
+      <label for="nlpRequest">What would you like to change?</label>
+      <textarea id="nlpRequest" rows="4"
+        placeholder="e.g. Add a mandatory check for patient consent forms in Stage 7, and require CONSORT diagram for RCT submissions."
+        style="font-size:14px; line-height:1.6;"></textarea>
+    </div>
+    <div style="display:flex; gap:10px; align-items:center; margin-bottom:4px;">
+      <button class="btn btn-primary" id="nlpGenerateBtn" onclick="nlpGenerate()">✨ Generate Proposal</button>
+      <button class="btn btn-ghost" onclick="nlpClear()">Clear</button>
+      <span id="nlpSpinner" style="display:none; color:#7a8aa8; font-size:13px;">⏳ Claude is thinking…</span>
+    </div>
+    <div id="nlpRequestStatus" class="status-bar" style="margin-top:10px;"></div>
+
+    <!-- Proposal panel (hidden until response arrives) -->
+    <div class="nlp-proposal" id="nlpProposal">
+      <div class="nlp-proposal-header">
+        <h3>📋 Proposed Change</h3>
+        <span id="nlpProposalBadge" style="font-size:12px; color:#7a8aa8;">review before applying</span>
+      </div>
+      <div class="nlp-summary" id="nlpSummary"></div>
+      <textarea class="nlp-yaml-preview" id="nlpProposedYaml" spellcheck="false" readonly></textarea>
+      <div class="nlp-actions">
+        <button class="btn btn-success" onclick="nlpApply()">✓ Apply This Change</button>
+        <button class="btn btn-ghost" onclick="nlpEditInEditor()">✎ Edit in YAML Editor</button>
+        <button class="btn btn-danger" onclick="nlpDiscard()">✕ Discard</button>
+        <div style="flex:1"></div>
+        <span id="nlpApplyStatus" style="font-size:13px; color:#7a8aa8;"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── GCS Version History Tab ────────────────────────────── -->
+  <div class="tab-panel" id="tab-versions">
+    <h2 style="font-size:16px; color:#1A5C96; margin-bottom:6px;">GCS Rule File Versions</h2>
+    <p style="color:#7a8aa8; font-size:13px; margin-bottom:20px;">
+      All versions are stored in Cloud Storage. You can push the current guidelines,
+      preview any version, or revert to a previous one.
+    </p>
+
+    <div class="gcs-toolbar">
+      <span id="gcsStatusBadge" class="gcs-status off">⬤ GCS not configured</span>
+      <div style="flex:1"></div>
+      <button class="btn btn-primary" onclick="gcsPush()">☁ Push Current Version to GCS</button>
+      <button class="btn btn-ghost" onclick="loadVersions()">↺ Refresh</button>
+    </div>
+    <div id="gcsPushStatus" class="status-bar" style="margin-bottom:16px;"></div>
+
+    <table class="versions-table" id="versionsTable">
+      <thead>
+        <tr>
+          <th>Version</th>
+          <th>Uploaded</th>
+          <th>Author</th>
+          <th>Size</th>
+          <th>Status</th>
+          <th style="text-align:right;">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="versionsBody">
+        <tr><td colspan="6" style="color:#7a8aa8; padding:20px;">Loading…</td></tr>
+      </tbody>
+    </table>
+    <div id="versionsStatus" class="status-bar" style="margin-top:12px;"></div>
+  </div>
+
+  <!-- ── YAML Preview Modal ──────────────────────────────────── -->
+  <div class="modal-overlay" id="yamlModal">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3 id="modalTitle">Version Preview</h3>
+        <button class="btn btn-ghost" onclick="closeModal()">✕ Close</button>
+      </div>
+      <div class="modal-body">
+        <textarea id="modalYaml" readonly spellcheck="false"></textarea>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-warn" id="modalRevertBtn" onclick="modalRevert()" style="display:none;">
+          ↩ Revert to This Version
+        </button>
+        <button class="btn btn-ghost" onclick="closeModal()">Close</button>
+      </div>
+    </div>
   </div>
 
   <!-- ── Changelog Tab ──────────────────────────────────────── -->
@@ -263,6 +447,7 @@ function showTab(name, btn) {
   document.getElementById('tab-' + name).classList.add('active');
   btn.classList.add('active');
   if (name === 'changelog') loadChangelog();
+  if (name === 'versions')  loadVersions();
 }
 
 // ── Auth ────────────────────────────────────────────────────────
@@ -353,7 +538,11 @@ async function validateYaml() {
   setStatus('editorStatus', 'Validating…', 'info');
 
   try {
-    const r = await fetch('/guidelines/validate', {method: 'POST'});
+    const r = await fetch('/guidelines/validate', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({yaml: raw}),
+    });
     const d = await r.json();
     if (d.valid) {
       setStatus('editorStatus', `✓ Valid — version ${d.version || 'unknown'}`, 'ok');
@@ -465,6 +654,241 @@ async function reloadGuidelines() {
     setStatus('reloadStatus', 'Request failed: ' + e.message, 'err');
   }
 }
+
+// ── NLP / AI Rule Update ─────────────────────────────────────────
+
+let _nlpProposedYaml = '';
+
+async function nlpGenerate() {
+  const req = document.getElementById('nlpRequest').value.trim();
+  if (!req) {
+    setStatus('nlpRequestStatus', 'Please describe the change you want to make.', 'err');
+    return;
+  }
+
+  document.getElementById('nlpRequestStatus').className = 'status-bar';
+  document.getElementById('nlpProposal').classList.remove('visible');
+  document.getElementById('nlpGenerateBtn').disabled = true;
+  document.getElementById('nlpSpinner').style.display = 'inline';
+  _nlpProposedYaml = '';
+
+  try {
+    const r = await fetch('/admin/guidelines/nlp-update', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({request: req}),
+    });
+    if (r.status === 401) { doLogout(); return; }
+    const d = await r.json();
+
+    if (d.error) {
+      setStatus('nlpRequestStatus', '✗ ' + d.error, 'err');
+      return;
+    }
+
+    _nlpProposedYaml = d.proposed_yaml || '';
+    document.getElementById('nlpSummary').textContent = d.summary || '(no summary)';
+    document.getElementById('nlpProposedYaml').value = _nlpProposedYaml;
+    document.getElementById('nlpApplyStatus').textContent = '';
+    document.getElementById('nlpProposal').classList.add('visible');
+    setStatus('nlpRequestStatus', '✓ Proposal generated. Review the changes below before applying.', 'ok');
+
+  } catch(e) {
+    setStatus('nlpRequestStatus', 'Request failed: ' + e.message, 'err');
+  } finally {
+    document.getElementById('nlpGenerateBtn').disabled = false;
+    document.getElementById('nlpSpinner').style.display = 'none';
+  }
+}
+
+async function nlpApply() {
+  const yaml = document.getElementById('nlpProposedYaml').value.trim();
+  if (!yaml) return;
+
+  document.getElementById('nlpApplyStatus').textContent = 'Saving…';
+  try {
+    const r = await fetch('/admin/guidelines/save', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({yaml}),
+    });
+    if (r.status === 401) { doLogout(); return; }
+    const d = await r.json();
+    if (d.saved) {
+      document.getElementById('nlpApplyStatus').style.color = '#3dd68c';
+      document.getElementById('nlpApplyStatus').textContent = '✓ Applied and saved!';
+      toast('Guidelines updated via AI!');
+      if (d.gcs && d.gcs.success) toast('Also pushed to GCS ✓');
+    } else {
+      document.getElementById('nlpApplyStatus').style.color = '#ff5c6a';
+      document.getElementById('nlpApplyStatus').textContent =
+        '✗ Save failed: ' + (d.errors || []).join('; ');
+    }
+  } catch(e) {
+    document.getElementById('nlpApplyStatus').style.color = '#ff5c6a';
+    document.getElementById('nlpApplyStatus').textContent = 'Request failed: ' + e.message;
+  }
+}
+
+function nlpEditInEditor() {
+  const yaml = document.getElementById('nlpProposedYaml').value.trim();
+  if (!yaml) return;
+  document.getElementById('yamlEditor').value = yaml;
+  // Switch to editor tab
+  document.querySelectorAll('.tab-btn')[0].click();
+  setStatus('editorStatus', '⬆ Proposed YAML loaded from AI. Review and save when ready.', 'info');
+}
+
+function nlpDiscard() {
+  _nlpProposedYaml = '';
+  document.getElementById('nlpProposal').classList.remove('visible');
+  document.getElementById('nlpRequestStatus').className = 'status-bar';
+}
+
+function nlpClear() {
+  document.getElementById('nlpRequest').value = '';
+  nlpDiscard();
+}
+
+// ── GCS Version History ──────────────────────────────────────────
+
+let _modalFilename = '';
+
+async function loadVersions() {
+  const tbody = document.getElementById('versionsBody');
+  tbody.innerHTML = '<tr><td colspan="6" style="color:#7a8aa8;padding:20px;">Loading…</td></tr>';
+  document.getElementById('versionsStatus').className = 'status-bar';
+
+  try {
+    const r = await fetch('/admin/guidelines/versions');
+    if (r.status === 401) { doLogout(); return; }
+    const d = await r.json();
+
+    const badge = document.getElementById('gcsStatusBadge');
+    if (d.gcs_configured) {
+      badge.textContent = '⬤ GCS connected';
+      badge.className = 'gcs-status on';
+    } else {
+      badge.textContent = '⬤ GCS not configured';
+      badge.className = 'gcs-status off';
+    }
+
+    const versions = d.versions || [];
+    if (!versions.length) {
+      tbody.innerHTML = '<tr><td colspan="6" style="color:#7a8aa8;padding:20px;">No versions in GCS yet. Push the current version to get started.</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = versions.map(v => {
+      const kb    = v.size_bytes ? (v.size_bytes / 1024).toFixed(1) + ' KB' : '—';
+      const date  = v.uploaded_at ? new Date(v.uploaded_at).toLocaleString() : '—';
+      const badge = v.is_current
+        ? '<span class="badge-current">✓ current</span>'
+        : '<span class="badge-old">archived</span>';
+      const revertBtn = v.is_current ? '' :
+        `<button class="btn btn-warn" style="padding:5px 12px;font-size:12px;"
+           onclick="gcsRevert('${esc(v.filename)}')">↩ Revert</button>`;
+      return `<tr>
+        <td><strong>${esc(v.version || '—')}</strong></td>
+        <td>${esc(date)}</td>
+        <td>${esc(v.author || '—')}</td>
+        <td>${esc(kb)}</td>
+        <td>${badge}</td>
+        <td style="text-align:right; white-space:nowrap;">
+          <button class="btn btn-ghost" style="padding:5px 12px;font-size:12px;"
+            onclick="gcsPreview('${esc(v.filename)}', '${esc(v.version || v.filename)}', ${v.is_current})">
+            Preview
+          </button>
+          ${revertBtn}
+        </td>
+      </tr>`;
+    }).join('');
+
+  } catch(e) {
+    tbody.innerHTML = `<tr><td colspan="6" style="color:#ff5c6a;padding:20px;">Error: ${esc(e.message)}</td></tr>`;
+  }
+}
+
+async function gcsPush() {
+  setStatus('gcsPushStatus', 'Pushing current version to GCS…', 'info');
+  try {
+    const r = await fetch('/admin/guidelines/push-to-gcs', {method: 'POST',
+      headers: {'Content-Type': 'application/json'}, body: JSON.stringify({})});
+    if (r.status === 401) { doLogout(); return; }
+    const d = await r.json();
+    if (d.success) {
+      setStatus('gcsPushStatus', `✓ Pushed as version ${d.version || d.filename}`, 'ok');
+      toast('Version pushed to GCS!');
+      loadVersions();
+    } else {
+      setStatus('gcsPushStatus', '✗ Push failed: ' + (d.error || 'unknown error'), 'err');
+    }
+  } catch(e) {
+    setStatus('gcsPushStatus', 'Request failed: ' + e.message, 'err');
+  }
+}
+
+async function gcsPreview(filename, label, isCurrent) {
+  _modalFilename = filename;
+  document.getElementById('modalTitle').textContent = `Preview — ${label}`;
+  document.getElementById('modalYaml').value = 'Loading…';
+  document.getElementById('modalRevertBtn').style.display = isCurrent ? 'none' : 'inline-flex';
+  document.getElementById('yamlModal').classList.add('open');
+
+  try {
+    const r = await fetch(`/admin/guidelines/version/${encodeURIComponent(filename)}`);
+    if (r.status === 401) { doLogout(); closeModal(); return; }
+    const d = await r.json();
+    document.getElementById('modalYaml').value = d.yaml || '(empty)';
+  } catch(e) {
+    document.getElementById('modalYaml').value = 'Error loading: ' + e.message;
+  }
+}
+
+async function modalRevert() {
+  if (!_modalFilename) return;
+  if (!confirm(`Revert to "${_modalFilename}"?\n\nThis will overwrite the current guidelines on disk and in GCS.`)) return;
+
+  document.getElementById('modalRevertBtn').disabled = true;
+  document.getElementById('modalRevertBtn').textContent = 'Reverting…';
+
+  try {
+    const r = await fetch('/admin/guidelines/revert', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({filename: _modalFilename}),
+    });
+    if (r.status === 401) { doLogout(); return; }
+    const d = await r.json();
+    if (d.success) {
+      toast(`Reverted to ${_modalFilename} ✓`);
+      closeModal();
+      loadVersions();
+      loadYaml(); // Refresh the editor too
+    } else {
+      alert('Revert failed: ' + (d.error || 'unknown error'));
+    }
+  } catch(e) {
+    alert('Request failed: ' + e.message);
+  } finally {
+    document.getElementById('modalRevertBtn').disabled = false;
+    document.getElementById('modalRevertBtn').textContent = '↩ Revert to This Version';
+  }
+}
+
+async function gcsRevert(filename) {
+  await gcsPreview(filename, filename, false);
+}
+
+function closeModal() {
+  document.getElementById('yamlModal').classList.remove('open');
+  _modalFilename = '';
+}
+
+// Close modal on overlay click
+document.getElementById('yamlModal').addEventListener('click', function(e) {
+  if (e.target === this) closeModal();
+});
 </script>
 </body>
 </html>
