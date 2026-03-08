@@ -6,6 +6,11 @@ and provides journal-specific context.
 SMEs can edit review_guidelines.yaml without touching any Python code.
 The loader is imported by review_agent.py and re-reads the YAML on each
 application start (or on-demand reload via /admin/reload-guidelines).
+
+When GCS_BUCKET is configured the loader fetches rules/current.yaml from
+GCS first and falls back to the local disk copy when GCS is unreachable.
+This decouples the rule file from the application container so all
+instances always use the latest published version from the storage bucket.
 """
 
 import os
@@ -19,8 +24,33 @@ logger = logging.getLogger(__name__)
 GUIDELINES_PATH = os.path.join(os.path.dirname(__file__), "review_guidelines.yaml")
 
 
+def _parse_yaml_str(raw: str) -> dict:
+    """Parse raw YAML text and validate the required 'stages' key."""
+    data = yaml.safe_load(raw)
+    if not data or "stages" not in data:
+        raise ValueError("Guidelines YAML is missing required 'stages' key.")
+    return data
+
+
 def _load_yaml() -> dict:
-    """Read and parse the YAML file. Raises clear errors on syntax issues."""
+    """
+    Load and parse guidelines YAML.
+    Priority: GCS current.yaml (when GCS_BUCKET is set) → local disk.
+    Falls back to disk silently if GCS is unavailable.
+    """
+    if os.environ.get("GCS_BUCKET"):
+        try:
+            from gcs_uploader import get_current_rule_from_gcs
+            raw = get_current_rule_from_gcs()
+            if raw:
+                logger.debug("Guidelines loaded from GCS current.yaml")
+                return _parse_yaml_str(raw)
+        except Exception as exc:
+            logger.warning(
+                f"GCS guidelines fetch failed — falling back to disk: {exc}"
+            )
+
+    # Local disk fallback
     with open(GUIDELINES_PATH, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
     if not data or "stages" not in data:
@@ -29,6 +59,15 @@ def _load_yaml() -> dict:
             f"Please check {GUIDELINES_PATH}"
         )
     return data
+
+
+def get_guidelines_version() -> str:
+    """Return the version string from the currently active guidelines."""
+    try:
+        data = _load_yaml()
+        return str(data.get("metadata", {}).get("version", "unknown"))
+    except Exception:
+        return "unknown"
 
 
 def _build_stage_text(stage_key: str, stage: dict) -> str:

@@ -12,7 +12,7 @@ import os
 import re
 import logging
 import anthropic
-from guidelines.guidelines_loader import build_system_prompt, get_stage_weights
+from guidelines.guidelines_loader import build_system_prompt, get_stage_weights, get_guidelines_version
 
 logger = logging.getLogger(__name__)
 
@@ -245,6 +245,7 @@ def run_review(file_bytes: bytes, filename: str, journal_name: str = "") -> dict
         "stage_scores": scores["stage_scores"],
         "weighted_score": scores["weighted_score"],
         "wrs_parts": scores["wrs_parts"],
+        "guidelines_version": get_guidelines_version(),
     }
 
 

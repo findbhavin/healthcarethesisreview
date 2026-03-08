@@ -481,12 +481,35 @@ def generate_report(review_result: dict) -> bytes:
     Generate a PDF report from the review_result dict produced by run_review().
     Returns raw bytes of the PDF.
     """
+    # Resolve guidelines version for the page footer
+    guidelines_version = review_result.get("guidelines_version", "")
+    if not guidelines_version:
+        try:
+            from guidelines.guidelines_loader import get_guidelines_version
+            guidelines_version = get_guidelines_version()
+        except Exception:
+            guidelines_version = "unknown"
+
+    def _draw_page_footer(canvas, doc):
+        """Stamp every page with a tiny rule-version footer."""
+        canvas.saveState()
+        canvas.setFont("Helvetica", 6.5)
+        canvas.setFillColor(colors.HexColor("#999999"))
+        footer_text = (
+            f"Review Guidelines Version: {guidelines_version}  "
+            f"|  AI-Assisted Editorial Review System  "
+            f"|  Page {doc.page}"
+        )
+        page_width = A4[0]
+        canvas.drawCentredString(page_width / 2.0, 0.65 * cm, footer_text)
+        canvas.restoreState()
+
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
         buf,
         pagesize=A4,
         leftMargin=2.5*cm, rightMargin=2.5*cm,
-        topMargin=2*cm, bottomMargin=2*cm,
+        topMargin=2*cm, bottomMargin=1.5*cm,
         title="Peer Review Report",
         author="AI-Assisted Editorial Review System",
     )
@@ -686,6 +709,6 @@ def generate_report(review_result: dict) -> bytes:
         footer_style,
     ))
 
-    doc.build(story)
+    doc.build(story, onFirstPage=_draw_page_footer, onLaterPages=_draw_page_footer)
     buf.seek(0)
     return buf.read()

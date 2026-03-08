@@ -34,18 +34,45 @@ import logging
 import io
 import hmac
 import hashlib
+import secrets
+from functools import wraps
 
-from flask import Flask, request, jsonify, send_file, Response, stream_with_context
+from flask import Flask, request, jsonify, send_file, Response, stream_with_context, session
+
+# Path to admin credentials file (JSON)
+_ADMIN_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "admin_config.json")
+
+
+def _load_admin_config() -> dict:
+    try:
+        with open(_ADMIN_CONFIG_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {"username": "admin", "password": "admin"}
+
+
+def _save_admin_config(cfg: dict) -> None:
+    with open(_ADMIN_CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2)
 
 from review_agent import run_review, extract_text, stream_review
 from report_generator import generate_report
-from gcs_uploader import upload_report
+from gcs_uploader import (
+    upload_report,
+    push_rule_version,
+    list_rule_versions,
+    get_rule_version,
+    revert_rule_version,
+)
 from guidelines.guidelines_loader import (
     get_metadata,
     get_changelog,
     get_journal_list,
     get_full_guidelines,
     validate_guidelines,
+    get_guidelines_raw,
+    save_guidelines_yaml,
+    get_guidelines_version,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -53,6 +80,17 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", secrets.token_hex(32))
+
+
+def _admin_required(fn):
+    """Decorator: require an active admin session."""
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if not session.get("admin_authenticated"):
+            return jsonify({"error": "Authentication required."}), 401
+        return fn(*args, **kwargs)
+    return wrapper
 
 ALLOWED_EXTENSIONS = {"pdf", "docx", "txt"}
 
@@ -389,6 +427,269 @@ def reload_guidelines():
         "message": "Guidelines will be applied to the next review request.",
         "version": result.get("version"),
     }), 200
+
+
+# ---------------------------------------------------------------------------
+# Admin authentication
+# ---------------------------------------------------------------------------
+
+@app.route("/admin", methods=["GET"])
+def admin_page():
+    html_path = os.path.join(os.path.dirname(__file__), "admin.html")
+    with open(html_path, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+@app.route("/admin/check-auth", methods=["GET"])
+def admin_check_auth():
+    if session.get("admin_authenticated"):
+        return jsonify({"authenticated": True,
+                        "username": session.get("admin_username", "admin")}), 200
+    return jsonify({"authenticated": False}), 401
+
+
+@app.route("/admin/login", methods=["POST"])
+def admin_login():
+    data = request.get_json(silent=True) or {}
+    username = data.get("username", "").strip()
+    password = data.get("password", "")
+    cfg = _load_admin_config()
+    if username == cfg.get("username") and password == cfg.get("password"):
+        session["admin_authenticated"] = True
+        session["admin_username"] = username
+        logger.info(f"Admin login: {username}")
+        return jsonify({"authenticated": True, "username": username}), 200
+    logger.warning(f"Failed admin login for '{username}'")
+    return jsonify({"error": "Invalid username or password."}), 401
+
+
+@app.route("/admin/logout", methods=["POST"])
+def admin_logout():
+    session.clear()
+    return jsonify({"logged_out": True}), 200
+
+
+@app.route("/admin/credentials", methods=["POST"])
+@_admin_required
+def admin_change_credentials():
+    data = request.get_json(silent=True) or {}
+    new_username = data.get("username", "").strip()
+    new_password = data.get("password", "")
+    confirm      = data.get("confirm_password", "")
+    if not new_username:
+        return jsonify({"error": "Username cannot be empty."}), 400
+    if not new_password:
+        return jsonify({"error": "Password cannot be empty."}), 400
+    if new_password != confirm:
+        return jsonify({"error": "Passwords do not match."}), 400
+    if len(new_password) < 6:
+        return jsonify({"error": "Password must be at least 6 characters."}), 400
+    _save_admin_config({"username": new_username, "password": new_password})
+    session["admin_username"] = new_username
+    return jsonify({"updated": True, "username": new_username}), 200
+
+
+# ---------------------------------------------------------------------------
+# Admin guidelines CRUD (disk + GCS versioning)
+# ---------------------------------------------------------------------------
+
+@app.route("/admin/guidelines/raw", methods=["GET"])
+@_admin_required
+def admin_guidelines_raw():
+    """Return the raw YAML text of the active guidelines (GCS or disk)."""
+    try:
+        return jsonify({"yaml": get_guidelines_raw()}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/admin/guidelines/save", methods=["POST"])
+@_admin_required
+def admin_guidelines_save():
+    """
+    Validate and save a new guidelines YAML to disk.
+    JSON body: {"yaml": "...raw yaml text..."}
+    Optionally auto-pushes to GCS if GCS_BUCKET is configured.
+    """
+    data = request.get_json(silent=True) or {}
+    raw_yaml = data.get("yaml", "")
+    if not raw_yaml.strip():
+        return jsonify({"saved": False, "errors": ["Empty YAML provided."]}), 400
+
+    result = save_guidelines_yaml(raw_yaml)
+    if result.get("saved"):
+        logger.info("Admin guidelines saved to disk.")
+        # Auto-push to GCS if configured
+        try:
+            import yaml as _yaml
+            meta = (_yaml.safe_load(raw_yaml) or {}).get("metadata", {})
+            version = str(meta.get("version", "unknown"))
+            author  = session.get("admin_username", "admin")
+            gcs_res = push_rule_version(raw_yaml, version, author)
+            result["gcs"] = gcs_res
+        except Exception as exc:
+            result["gcs"] = {"success": False, "error": str(exc)}
+    return jsonify(result), 200 if result.get("saved") else 422
+
+
+# ---------------------------------------------------------------------------
+# Admin NLP-based rule update (uses Claude to interpret natural language)
+# ---------------------------------------------------------------------------
+
+@app.route("/admin/guidelines/nlp-update", methods=["POST"])
+@_admin_required
+def admin_guidelines_nlp_update():
+    """
+    Accept a natural-language description of a desired rule change.
+    Claude interprets the request and returns a proposed updated YAML.
+
+    JSON body: {"request": "Add a check for patient consent forms in Stage 7"}
+    Returns:   {"proposed_yaml": "...", "summary": "...", "diff_hint": "..."}
+    """
+    data = request.get_json(silent=True) or {}
+    nlp_request = (data.get("request") or "").strip()
+    if not nlp_request:
+        return jsonify({"error": "No update request provided."}), 400
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return jsonify({"error": "ANTHROPIC_API_KEY not configured."}), 503
+
+    try:
+        current_yaml = get_guidelines_raw()
+    except Exception as e:
+        return jsonify({"error": f"Could not load current guidelines: {e}"}), 500
+
+    import anthropic as _anthropic
+    client = _anthropic.Anthropic(api_key=api_key)
+
+    system_prompt = (
+        "You are an expert medical journal editor and YAML editor. "
+        "You will be given the current review guidelines YAML and a plain-English "
+        "description of a desired change. "
+        "Respond with:\n"
+        "1. A <summary> block: one sentence describing what you changed.\n"
+        "2. A <yaml> block: the complete updated YAML (valid YAML, same structure, "
+        "   version number incremented by 0.1, today's date in last_updated, "
+        "   a new changelog entry added).\n"
+        "Output ONLY those two XML-style blocks, nothing else.\n"
+        "Example:\n"
+        "<summary>Added a check for patient consent forms to Stage 7.</summary>\n"
+        "<yaml>\n...full yaml...\n</yaml>"
+    )
+    user_msg = (
+        f"CURRENT GUIDELINES YAML:\n```yaml\n{current_yaml}\n```\n\n"
+        f"REQUESTED CHANGE:\n{nlp_request}"
+    )
+
+    try:
+        message = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=8192,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_msg}],
+        )
+        raw_response = message.content[0].text
+    except Exception as e:
+        logger.exception("NLP guideline update Claude call failed")
+        return jsonify({"error": f"AI call failed: {e}"}), 500
+
+    # Parse <summary> and <yaml> blocks from response
+    import re as _re
+    summary_match = _re.search(r"<summary>(.*?)</summary>", raw_response,
+                               _re.DOTALL | _re.IGNORECASE)
+    yaml_match    = _re.search(r"<yaml>(.*?)</yaml>", raw_response,
+                               _re.DOTALL | _re.IGNORECASE)
+
+    if not yaml_match:
+        return jsonify({
+            "error": "AI response did not contain a valid <yaml> block.",
+            "raw_response": raw_response[:2000],
+        }), 500
+
+    proposed_yaml = yaml_match.group(1).strip()
+    summary       = summary_match.group(1).strip() if summary_match else "See proposed YAML."
+
+    # Quick structural validation of the proposed YAML
+    try:
+        import yaml as _yaml
+        _yaml.safe_load(proposed_yaml)
+    except Exception as e:
+        return jsonify({
+            "error": f"AI-generated YAML is invalid: {e}",
+            "proposed_yaml": proposed_yaml,
+        }), 422
+
+    logger.info(f"NLP guideline update generated. Summary: {summary}")
+    return jsonify({
+        "proposed_yaml": proposed_yaml,
+        "summary": summary,
+    }), 200
+
+
+# ---------------------------------------------------------------------------
+# Admin GCS rule versioning endpoints
+# ---------------------------------------------------------------------------
+
+@app.route("/admin/guidelines/versions", methods=["GET"])
+@_admin_required
+def admin_guidelines_versions():
+    """List all rule versions stored in GCS."""
+    versions = list_rule_versions()
+    return jsonify({"versions": versions, "gcs_configured": bool(os.environ.get("GCS_BUCKET"))}), 200
+
+
+@app.route("/admin/guidelines/push-to-gcs", methods=["POST"])
+@_admin_required
+def admin_guidelines_push_gcs():
+    """
+    Push the current disk YAML to GCS as a new versioned snapshot.
+    JSON body (optional): {"version": "2.1", "author": "Dr. Smith"}
+    """
+    data = request.get_json(silent=True) or {}
+    author = data.get("author") or session.get("admin_username", "admin")
+    try:
+        raw_yaml = get_guidelines_raw()
+        import yaml as _yaml
+        meta    = (_yaml.safe_load(raw_yaml) or {}).get("metadata", {})
+        version = data.get("version") or str(meta.get("version", "unknown"))
+        result  = push_rule_version(raw_yaml, version, author)
+        return jsonify(result), 200 if result.get("success") else 500
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/admin/guidelines/revert", methods=["POST"])
+@_admin_required
+def admin_guidelines_revert():
+    """
+    Revert to a previously stored GCS rule version and sync it to disk.
+    JSON body: {"filename": "v2.0.yaml"}
+    """
+    data = request.get_json(silent=True) or {}
+    filename = (data.get("filename") or "").strip()
+    if not filename:
+        return jsonify({"success": False, "error": "filename is required."}), 400
+
+    result = revert_rule_version(filename)
+    if result.get("success"):
+        # Also sync the reverted content back to disk
+        yaml_content = get_rule_version(filename)
+        if yaml_content:
+            save_result = save_guidelines_yaml(yaml_content)
+            result["disk_synced"] = save_result.get("saved", False)
+        logger.info(f"Admin reverted guidelines to {filename}")
+    return jsonify(result), 200 if result.get("success") else 500
+
+
+@app.route("/admin/guidelines/version/<filename>", methods=["GET"])
+@_admin_required
+def admin_guidelines_get_version(filename: str):
+    """Download a specific rule version YAML from GCS."""
+    yaml_content = get_rule_version(filename)
+    if yaml_content is None:
+        return jsonify({"error": f"{filename} not found."}), 404
+    return jsonify({"yaml": yaml_content, "filename": filename}), 200
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,852 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Admin — Review Guidelines Editor</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: system-ui, -apple-system, sans-serif;
+    background: #0f1117; color: #e8eaf0;
+    min-height: 100vh;
+  }
+
+  /* ── Login page ─────────────────────────────────────────── */
+  #loginScreen {
+    display: flex; align-items: center; justify-content: center;
+    min-height: 100vh;
+  }
+  .login-card {
+    background: #181c27; border: 1px solid #2a3050;
+    border-radius: 16px; padding: 40px 36px;
+    width: 100%; max-width: 400px;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.5);
+  }
+  .login-card h1 { color: #1A5C96; font-size: 22px; margin-bottom: 6px; }
+  .login-card p  { color: #7a8aa8; font-size: 13px; margin-bottom: 28px; }
+  label { display: block; font-size: 12px; color: #7a8aa8; margin-bottom: 5px; }
+  input[type=text], input[type=password], textarea, select {
+    width: 100%; background: #0f1117; border: 1px solid #2a3050;
+    border-radius: 8px; color: #e8eaf0; padding: 10px 14px; font-size: 14px;
+    outline: none; transition: border-color .2s;
+  }
+  input[type=text]:focus, input[type=password]:focus,
+  textarea:focus, select:focus { border-color: #1A5C96; }
+  .field { margin-bottom: 18px; }
+
+  /* ── Buttons ─────────────────────────────────────────────── */
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 10px 20px; border-radius: 8px; border: none;
+    font-size: 14px; font-weight: 600; cursor: pointer;
+    transition: opacity .2s;
+  }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn-primary { background: #1A5C96; color: #fff; }
+  .btn-primary:not(:disabled):hover { opacity: .85; }
+  .btn-success { background: #006600; color: #fff; }
+  .btn-success:not(:disabled):hover { opacity: .85; }
+  .btn-warn   { background: #B86E00; color: #fff; }
+  .btn-warn:not(:disabled):hover { opacity: .85; }
+  .btn-danger { background: #CC0000; color: #fff; }
+  .btn-danger:not(:disabled):hover { opacity: .85; }
+  .btn-ghost  { background: transparent; color: #7a8aa8; border: 1px solid #2a3050; }
+  .btn-ghost:not(:disabled):hover { border-color: #1A5C96; color: #e8eaf0; }
+  .btn-full   { width: 100%; justify-content: center; }
+  .btn-sm     { padding: 6px 14px; font-size: 12px; }
+
+  /* ── Main admin layout ─────────────────────────────────── */
+  #adminScreen { display: none; flex-direction: column; min-height: 100vh; }
+
+  .topbar {
+    background: #181c27; border-bottom: 1px solid #2a3050;
+    padding: 14px 32px; display: flex; align-items: center; gap: 16px;
+  }
+  .topbar h1 { font-size: 18px; color: #1A5C96; flex: 1; }
+  .topbar span { font-size: 13px; color: #7a8aa8; }
+
+  .tabs {
+    display: flex; gap: 0; border-bottom: 1px solid #2a3050;
+    background: #181c27; padding: 0 32px; flex-wrap: wrap;
+  }
+  .tab-btn {
+    padding: 12px 18px; font-size: 13px; font-weight: 600;
+    color: #7a8aa8; cursor: pointer; border-bottom: 2px solid transparent;
+    background: none; border-top: none; border-left: none; border-right: none;
+    transition: color .2s, border-color .2s; white-space: nowrap;
+  }
+  .tab-btn.active { color: #1A5C96; border-bottom-color: #1A5C96; }
+
+  .tab-panel { display: none; padding: 28px 32px; flex: 1; }
+  .tab-panel.active { display: block; }
+
+  /* ── Status bars ────────────────────────────────────────── */
+  .status-bar {
+    margin-top: 12px; padding: 10px 14px; border-radius: 8px;
+    font-size: 13px; display: none; white-space: pre-wrap;
+  }
+  .status-bar.ok   { background: #0a2010; border: 1px solid #3dd68c; color: #3dd68c; display: block; }
+  .status-bar.err  { background: #2a1010; border: 1px solid #ff5c6a; color: #ff5c6a; display: block; }
+  .status-bar.info { background: #0a1c30; border: 1px solid #1A5C96; color: #90b8e0; display: block; }
+
+  /* ── YAML Editor ───────────────────────────────────────── */
+  .editor-toolbar {
+    display: flex; gap: 10px; align-items: center;
+    margin-bottom: 14px; flex-wrap: wrap;
+  }
+  .editor-toolbar .spacer { flex: 1; }
+  textarea.yaml-area {
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 13px; line-height: 1.55;
+    min-height: 480px; resize: vertical;
+    padding: 16px; background: #0c0e16;
+    border: 1px solid #2a3050; border-radius: 8px;
+    tab-size: 2; white-space: pre;
+  }
+
+  /* ── NLP update panel ──────────────────────────────────── */
+  .nlp-panel {
+    background: #181c27; border: 1px solid #2a3050;
+    border-radius: 12px; padding: 24px; margin-bottom: 24px;
+  }
+  .nlp-panel h3 { font-size: 15px; color: #e8eaf0; margin-bottom: 6px; }
+  .nlp-panel p  { font-size: 13px; color: #7a8aa8; margin-bottom: 16px; }
+  .nlp-input-row { display: flex; gap: 10px; align-items: flex-end; }
+  .nlp-input-row textarea {
+    flex: 1; min-height: 72px; resize: vertical;
+    font-family: inherit;
+  }
+  .nlp-proposal {
+    margin-top: 20px; background: #0c0e16;
+    border: 1px solid #1A5C96; border-radius: 8px; padding: 16px;
+    display: none;
+  }
+  .nlp-proposal .summary-box {
+    background: #0a1c30; border-radius: 6px;
+    padding: 10px 14px; margin-bottom: 14px; font-size: 13px; color: #90b8e0;
+  }
+  .nlp-proposal .proposal-actions {
+    display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap;
+  }
+
+  /* ── Version history table ─────────────────────────────── */
+  .versions-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .versions-table th {
+    background: #1A5C96; color: #fff; text-align: left;
+    padding: 10px 12px;
+  }
+  .versions-table td {
+    padding: 10px 12px; border-bottom: 1px solid #2a3050; vertical-align: middle;
+  }
+  .versions-table tr:nth-child(even) td { background: #181c27; }
+  .badge-current {
+    display: inline-block; background: #006600; color: #fff;
+    border-radius: 4px; padding: 2px 8px; font-size: 11px; font-weight: 700;
+  }
+  .gcs-status {
+    display: flex; align-items: center; gap: 10px;
+    background: #181c27; border: 1px solid #2a3050;
+    border-radius: 8px; padding: 12px 16px; margin-bottom: 20px; font-size: 13px;
+  }
+  .gcs-dot { width: 10px; height: 10px; border-radius: 50%; }
+  .gcs-dot.on  { background: #3dd68c; }
+  .gcs-dot.off { background: #ff5c6a; }
+
+  /* ── Changelog ─────────────────────────────────────────── */
+  .changelog-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .changelog-table th {
+    background: #1A5C96; color: #fff; text-align: left;
+    padding: 10px 12px;
+  }
+  .changelog-table td {
+    padding: 10px 12px; border-bottom: 1px solid #2a3050;
+  }
+  .changelog-table tr:nth-child(even) td { background: #181c27; }
+
+  /* ── Settings ─────────────────────────────────────────── */
+  .settings-section {
+    background: #181c27; border: 1px solid #2a3050;
+    border-radius: 12px; padding: 28px; max-width: 480px;
+    margin-bottom: 24px;
+  }
+  .settings-section h3 { font-size: 15px; color: #e8eaf0; margin-bottom: 16px; }
+
+  /* ── Spinner ─────────────────────────────────────────────── */
+  .spinner {
+    display: inline-block; width: 14px; height: 14px;
+    border: 2px solid rgba(255,255,255,.3);
+    border-top-color: #fff; border-radius: 50%;
+    animation: spin .6s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── Toast ────────────────────────────────────────────── */
+  #toast {
+    position: fixed; bottom: 24px; right: 24px;
+    background: #1A5C96; color: #fff;
+    padding: 12px 20px; border-radius: 10px;
+    font-size: 14px; opacity: 0;
+    transition: opacity .35s;
+    pointer-events: none; z-index: 999;
+  }
+  #toast.show { opacity: 1; }
+
+  /* ── Diff view ────────────────────────────────────────── */
+  .diff-hint { font-size: 12px; color: #7a8aa8; margin-top: 8px; }
+  .section-title { font-size: 16px; color: #1A5C96; margin-bottom: 16px; font-weight: 700; }
+  .section-desc  { font-size: 13px; color: #7a8aa8; margin-bottom: 20px; }
+</style>
+</head>
+<body>
+
+<!-- ══════════════════════════════════════════════════════════════ -->
+<!--  LOGIN SCREEN                                                  -->
+<!-- ══════════════════════════════════════════════════════════════ -->
+<div id="loginScreen">
+  <div class="login-card">
+    <h1>🔐 Admin Login</h1>
+    <p>Sign in to manage review guidelines and settings.</p>
+    <div class="field">
+      <label for="loginUser">Username</label>
+      <input type="text" id="loginUser" autocomplete="username" placeholder="admin">
+    </div>
+    <div class="field">
+      <label for="loginPass">Password</label>
+      <input type="password" id="loginPass" autocomplete="current-password" placeholder="••••••••">
+    </div>
+    <div id="loginError" class="status-bar err" style="display:none; margin-bottom:14px;"></div>
+    <button class="btn btn-primary btn-full" id="loginBtn" onclick="doLogin()">Sign In</button>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════ -->
+<!--  ADMIN SCREEN                                                  -->
+<!-- ══════════════════════════════════════════════════════════════ -->
+<div id="adminScreen">
+
+  <!-- Top bar -->
+  <div class="topbar">
+    <h1>Review Guidelines Admin</h1>
+    <span id="topbarUser"></span>
+    <button class="btn btn-ghost" onclick="doLogout()">Sign Out</button>
+  </div>
+
+  <!-- Tabs -->
+  <div class="tabs">
+    <button class="tab-btn active"  onclick="showTab('editor',   this)">📝 YAML Editor</button>
+    <button class="tab-btn"         onclick="showTab('nlp',      this)">🤖 AI Rule Update</button>
+    <button class="tab-btn"         onclick="showTab('versions', this)">🗂 Version History</button>
+    <button class="tab-btn"         onclick="showTab('changelog',this)">📋 Changelog</button>
+    <button class="tab-btn"         onclick="showTab('settings', this)">⚙️ Settings</button>
+  </div>
+
+  <!-- ── Tab: YAML Editor ──────────────────────────────────────── -->
+  <div class="tab-panel active" id="tab-editor">
+    <p class="section-desc">
+      Edit the review guidelines YAML directly. Save to disk and auto-push to GCS storage bucket.
+    </p>
+    <div class="editor-toolbar">
+      <button class="btn btn-ghost"    onclick="loadYaml()">↺ Reload</button>
+      <button class="btn btn-warn"     onclick="validateYaml()">✓ Validate</button>
+      <div class="spacer"></div>
+      <button class="btn btn-primary"  onclick="pushToGcs()">☁ Push to GCS</button>
+      <button class="btn btn-success"  onclick="saveYaml()">💾 Save &amp; Deploy</button>
+    </div>
+    <textarea id="yamlEditor" class="yaml-area" spellcheck="false" placeholder="Loading…"></textarea>
+    <div id="editorStatus" class="status-bar"></div>
+  </div>
+
+  <!-- ── Tab: AI Rule Update (NLP) ────────────────────────────── -->
+  <div class="tab-panel" id="tab-nlp">
+    <p class="section-title">🤖 AI-Powered Rule Update</p>
+    <p class="section-desc">
+      Describe the change you want to make in plain English. Claude will generate an updated
+      guidelines YAML for your review. You can then apply it or discard it.
+    </p>
+
+    <div class="nlp-panel">
+      <h3>Describe the rule change</h3>
+      <p>Example: "Add a check in Stage 7 requiring authors to declare patient consent forms."</p>
+      <div class="nlp-input-row">
+        <textarea id="nlpRequest" placeholder="e.g. Add a check for sample size justification to Stage 3…"></textarea>
+        <button class="btn btn-primary" id="nlpBtn" onclick="doNlpUpdate()" style="white-space:nowrap;">
+          Generate Update
+        </button>
+      </div>
+      <div id="nlpStatus" class="status-bar"></div>
+
+      <!-- Proposal area -->
+      <div class="nlp-proposal" id="nlpProposal">
+        <div class="summary-box" id="nlpSummary"></div>
+        <label>Proposed YAML (review before applying):</label>
+        <textarea id="nlpYamlPreview" class="yaml-area" style="min-height:320px; margin-top:8px;"
+                  spellcheck="false"></textarea>
+        <div class="proposal-actions">
+          <button class="btn btn-success" onclick="applyNlpProposal()">✓ Apply &amp; Save</button>
+          <button class="btn btn-primary" onclick="copyToEditor()">📋 Copy to YAML Editor</button>
+          <button class="btn btn-ghost"   onclick="discardNlpProposal()">✗ Discard</button>
+        </div>
+        <div id="nlpApplyStatus" class="status-bar"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Tab: Version History ──────────────────────────────────── -->
+  <div class="tab-panel" id="tab-versions">
+    <p class="section-title">🗂 Rule File Version History</p>
+    <p class="section-desc">
+      All rule file versions stored in the GCS storage bucket. You can preview any version
+      and revert the active guidelines to a previous snapshot.
+    </p>
+
+    <div class="gcs-status" id="gcsStatusBar">
+      <div class="gcs-dot off" id="gcsDot"></div>
+      <span id="gcsStatusText">Checking GCS connection…</span>
+    </div>
+
+    <div style="display:flex; gap:10px; margin-bottom:16px; flex-wrap:wrap;">
+      <button class="btn btn-ghost"    onclick="loadVersions()">↺ Refresh</button>
+      <button class="btn btn-primary"  onclick="pushCurrentToGcs()">☁ Push Current Version to GCS</button>
+    </div>
+
+    <table class="versions-table">
+      <thead>
+        <tr>
+          <th>Version</th>
+          <th>Uploaded</th>
+          <th>Author</th>
+          <th>Size</th>
+          <th>Status</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="versionsBody">
+        <tr><td colspan="6" style="color:#7a8aa8; padding:20px;">Loading…</td></tr>
+      </tbody>
+    </table>
+    <div id="versionsStatus" class="status-bar" style="margin-top:14px;"></div>
+
+    <!-- Version preview pane -->
+    <div id="versionPreviewPane" style="margin-top:24px; display:none;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+        <strong id="versionPreviewTitle" style="color:#1A5C96;"></strong>
+        <button class="btn btn-ghost btn-sm" onclick="closeVersionPreview()">✗ Close</button>
+      </div>
+      <textarea id="versionPreviewYaml" class="yaml-area" style="min-height:280px;"
+                readonly spellcheck="false"></textarea>
+    </div>
+  </div>
+
+  <!-- ── Tab: Changelog ─────────────────────────────────────────── -->
+  <div class="tab-panel" id="tab-changelog">
+    <h2 class="section-title">Guidelines Changelog</h2>
+    <table class="changelog-table" id="changelogTable">
+      <thead>
+        <tr>
+          <th>Version</th><th>Date</th><th>Author</th><th>Changes</th>
+        </tr>
+      </thead>
+      <tbody id="changelogBody">
+        <tr><td colspan="4" style="color:#7a8aa8; padding:20px;">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ── Tab: Settings ──────────────────────────────────────────── -->
+  <div class="tab-panel" id="tab-settings">
+
+    <div class="settings-section">
+      <h3>Change Admin Credentials</h3>
+      <div class="field">
+        <label for="newUser">New Username</label>
+        <input type="text" id="newUser" autocomplete="off" placeholder="admin">
+      </div>
+      <div class="field">
+        <label for="newPass">New Password (min 6 characters)</label>
+        <input type="password" id="newPass" autocomplete="new-password" placeholder="••••••••">
+      </div>
+      <div class="field">
+        <label for="confPass">Confirm Password</label>
+        <input type="password" id="confPass" autocomplete="new-password" placeholder="••••••••">
+      </div>
+      <div id="credStatus" class="status-bar" style="margin-bottom:14px;"></div>
+      <button class="btn btn-primary" onclick="changeCredentials()">Update Credentials</button>
+    </div>
+
+    <div class="settings-section">
+      <h3>Hot-Reload Guidelines</h3>
+      <p style="color:#7a8aa8; font-size:13px; margin-bottom:16px;">
+        Force the application to re-read the YAML without restarting.
+        This happens automatically on Save &amp; Deploy above.
+      </p>
+      <button class="btn btn-ghost" onclick="reloadGuidelines()">↺ Hot-Reload Now</button>
+      <div id="reloadStatus" class="status-bar" style="margin-top:12px;"></div>
+    </div>
+
+  </div>
+
+</div><!-- /adminScreen -->
+
+<!-- Toast notification -->
+<div id="toast"></div>
+
+<script>
+// ── Utilities ──────────────────────────────────────────────────────
+function toast(msg, ms = 3000) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), ms);
+}
+
+function setStatus(id, msg, type) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = msg;
+  el.className = 'status-bar ' + type;
+}
+
+function esc(s) {
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function fmtDate(iso) {
+  if (!iso) return '—';
+  try { return new Date(iso).toLocaleString(); } catch { return iso; }
+}
+
+function fmtSize(bytes) {
+  if (!bytes) return '—';
+  if (bytes < 1024) return bytes + ' B';
+  return (bytes / 1024).toFixed(1) + ' KB';
+}
+
+function showTab(name, btn) {
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  btn.classList.add('active');
+  if (name === 'changelog') loadChangelog();
+  if (name === 'versions')  loadVersions();
+}
+
+// ── Auth ───────────────────────────────────────────────────────────
+async function doLogin() {
+  const btn  = document.getElementById('loginBtn');
+  const user = document.getElementById('loginUser').value.trim();
+  const pass = document.getElementById('loginPass').value;
+  const err  = document.getElementById('loginError');
+
+  err.style.display = 'none';
+  btn.disabled = true;
+  btn.textContent = 'Signing in…';
+
+  try {
+    const r = await fetch('/admin/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({username: user, password: pass}),
+    });
+    const d = await r.json();
+    if (r.ok && d.authenticated) {
+      showAdmin(d.username);
+    } else {
+      err.textContent = d.error || 'Login failed.';
+      err.style.display = 'block';
+    }
+  } catch(e) {
+    err.textContent = 'Network error. Please try again.';
+    err.style.display = 'block';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Sign In';
+  }
+}
+
+async function doLogout() {
+  await fetch('/admin/logout', {method: 'POST'});
+  document.getElementById('adminScreen').style.display = 'none';
+  document.getElementById('loginScreen').style.display = 'flex';
+  document.getElementById('loginPass').value = '';
+}
+
+function showAdmin(username) {
+  document.getElementById('loginScreen').style.display = 'none';
+  document.getElementById('adminScreen').style.display = 'flex';
+  document.getElementById('topbarUser').textContent = '👤 ' + username;
+  loadYaml();
+}
+
+// Auto-check auth on page load
+(async function() {
+  try {
+    const r = await fetch('/admin/check-auth');
+    if (r.ok) {
+      const d = await r.json();
+      if (d.authenticated) showAdmin(d.username);
+    }
+  } catch(e) {}
+})();
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter' &&
+      document.getElementById('loginScreen').style.display !== 'none') {
+    doLogin();
+  }
+});
+
+// ── YAML Editor tab ────────────────────────────────────────────────
+async function loadYaml() {
+  const ta = document.getElementById('yamlEditor');
+  ta.value = 'Loading…';
+  setStatus('editorStatus', '', '');
+  try {
+    const r = await fetch('/admin/guidelines/raw');
+    if (r.status === 401) { doLogout(); return; }
+    const d = await r.json();
+    ta.value = d.yaml || '';
+    setStatus('editorStatus', '✓ Loaded successfully.', 'info');
+  } catch(e) {
+    setStatus('editorStatus', 'Error loading YAML: ' + e.message, 'err');
+  }
+}
+
+async function validateYaml() {
+  setStatus('editorStatus', 'Validating…', 'info');
+  try {
+    const r = await fetch('/guidelines/validate', {method: 'POST'});
+    const d = await r.json();
+    if (d.valid) {
+      setStatus('editorStatus', `✓ Valid — version ${d.version || 'unknown'}`, 'ok');
+    } else {
+      setStatus('editorStatus', '✗ Errors:\n' + (d.errors || []).join('\n'), 'err');
+    }
+  } catch(e) {
+    setStatus('editorStatus', 'Validation failed: ' + e.message, 'err');
+  }
+}
+
+async function saveYaml() {
+  const raw = document.getElementById('yamlEditor').value.trim();
+  if (!raw) { setStatus('editorStatus', 'Cannot save empty content.', 'err'); return; }
+  setStatus('editorStatus', 'Saving & deploying…', 'info');
+  try {
+    const r = await fetch('/admin/guidelines/save', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({yaml: raw}),
+    });
+    if (r.status === 401) { doLogout(); return; }
+    const d = await r.json();
+    if (d.saved) {
+      let msg = '✓ Saved to disk & reloaded.';
+      if (d.gcs) {
+        msg += d.gcs.success
+          ? `  ☁ Pushed to GCS as ${d.gcs.filename}.`
+          : `  ⚠ GCS push skipped: ${d.gcs.error}`;
+      }
+      setStatus('editorStatus', msg, 'ok');
+      toast('Guidelines saved & deployed!');
+    } else {
+      setStatus('editorStatus', '✗ Save failed:\n' + (d.errors || []).join('\n'), 'err');
+    }
+  } catch(e) {
+    setStatus('editorStatus', 'Save request failed: ' + e.message, 'err');
+  }
+}
+
+async function pushToGcs() {
+  setStatus('editorStatus', 'Pushing current disk version to GCS…', 'info');
+  try {
+    const r = await fetch('/admin/guidelines/push-to-gcs', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({}),
+    });
+    if (r.status === 401) { doLogout(); return; }
+    const d = await r.json();
+    if (d.success) {
+      setStatus('editorStatus', `☁ Pushed to GCS as ${d.filename} (version ${d.version}).`, 'ok');
+      toast('Pushed to GCS!');
+    } else {
+      setStatus('editorStatus', '✗ GCS push failed: ' + (d.error || 'unknown'), 'err');
+    }
+  } catch(e) {
+    setStatus('editorStatus', 'Push failed: ' + e.message, 'err');
+  }
+}
+
+// ── NLP tab ────────────────────────────────────────────────────────
+async function doNlpUpdate() {
+  const nlpReq = document.getElementById('nlpRequest').value.trim();
+  if (!nlpReq) {
+    setStatus('nlpStatus', 'Please enter a rule change description.', 'err'); return;
+  }
+  const btn = document.getElementById('nlpBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Generating…';
+  setStatus('nlpStatus', 'Sending request to Claude…', 'info');
+  document.getElementById('nlpProposal').style.display = 'none';
+
+  try {
+    const r = await fetch('/admin/guidelines/nlp-update', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({request: nlpReq}),
+    });
+    if (r.status === 401) { doLogout(); return; }
+    const d = await r.json();
+    if (d.proposed_yaml) {
+      document.getElementById('nlpSummary').textContent = '✓ ' + (d.summary || 'Changes generated.');
+      document.getElementById('nlpYamlPreview').value = d.proposed_yaml;
+      document.getElementById('nlpProposal').style.display = 'block';
+      setStatus('nlpStatus', 'Proposal ready. Review the YAML below before applying.', 'ok');
+    } else {
+      setStatus('nlpStatus', '✗ ' + (d.error || 'Generation failed.'), 'err');
+    }
+  } catch(e) {
+    setStatus('nlpStatus', 'Request failed: ' + e.message, 'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Generate Update';
+  }
+}
+
+async function applyNlpProposal() {
+  const raw = document.getElementById('nlpYamlPreview').value.trim();
+  if (!raw) { setStatus('nlpApplyStatus', 'No YAML to apply.', 'err'); return; }
+  setStatus('nlpApplyStatus', 'Saving…', 'info');
+  try {
+    const r = await fetch('/admin/guidelines/save', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({yaml: raw}),
+    });
+    if (r.status === 401) { doLogout(); return; }
+    const d = await r.json();
+    if (d.saved) {
+      let msg = '✓ Applied successfully! Guidelines updated & deployed.';
+      if (d.gcs && d.gcs.success)
+        msg += ` ☁ Pushed to GCS as ${d.gcs.filename}.`;
+      setStatus('nlpApplyStatus', msg, 'ok');
+      // Mirror to YAML editor
+      document.getElementById('yamlEditor').value = raw;
+      toast('Rule update applied!');
+    } else {
+      setStatus('nlpApplyStatus', '✗ Save failed:\n' + (d.errors || []).join('\n'), 'err');
+    }
+  } catch(e) {
+    setStatus('nlpApplyStatus', 'Request failed: ' + e.message, 'err');
+  }
+}
+
+function copyToEditor() {
+  const raw = document.getElementById('nlpYamlPreview').value;
+  document.getElementById('yamlEditor').value = raw;
+  // Switch to editor tab
+  document.querySelectorAll('.tab-btn')[0].click();
+  toast('Copied to YAML editor.');
+}
+
+function discardNlpProposal() {
+  document.getElementById('nlpProposal').style.display = 'none';
+  document.getElementById('nlpYamlPreview').value = '';
+  setStatus('nlpStatus', '', '');
+  setStatus('nlpApplyStatus', '', '');
+}
+
+// ── Version History tab ────────────────────────────────────────────
+async function loadVersions() {
+  const tbody = document.getElementById('versionsBody');
+  tbody.innerHTML = '<tr><td colspan="6" style="color:#7a8aa8;padding:20px;">Loading…</td></tr>';
+  setStatus('versionsStatus', '', '');
+
+  try {
+    const r = await fetch('/admin/guidelines/versions');
+    if (r.status === 401) { doLogout(); return; }
+    const d = await r.json();
+
+    // Update GCS connection indicator
+    const dot  = document.getElementById('gcsDot');
+    const text = document.getElementById('gcsStatusText');
+    if (d.gcs_configured) {
+      dot.className  = 'gcs-dot on';
+      text.textContent = `GCS connected — ${(d.versions || []).length} version(s) stored.`;
+    } else {
+      dot.className  = 'gcs-dot off';
+      text.textContent = 'GCS not configured (GCS_BUCKET env var not set). Versioning disabled.';
+    }
+
+    const versions = d.versions || [];
+    if (!versions.length) {
+      tbody.innerHTML = '<tr><td colspan="6" style="color:#7a8aa8;padding:20px;">No versions stored in GCS yet. Save or push to create the first version.</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = versions.map(v => `
+      <tr>
+        <td><strong>${esc(v.version || '—')}</strong></td>
+        <td>${esc(fmtDate(v.uploaded_at))}</td>
+        <td>${esc(v.author || '—')}</td>
+        <td>${esc(fmtSize(v.size_bytes))}</td>
+        <td>${v.is_current ? '<span class="badge-current">ACTIVE</span>' : ''}</td>
+        <td style="display:flex;gap:6px;flex-wrap:wrap;">
+          <button class="btn btn-ghost btn-sm" onclick="previewVersion('${esc(v.filename)}')">Preview</button>
+          ${!v.is_current
+            ? `<button class="btn btn-warn btn-sm" onclick="revertVersion('${esc(v.filename)}','${esc(v.version)}')">Revert</button>`
+            : '<button class="btn btn-ghost btn-sm" disabled>Current</button>'}
+        </td>
+      </tr>
+    `).join('');
+  } catch(e) {
+    tbody.innerHTML = `<tr><td colspan="6" style="color:#ff5c6a;padding:20px;">Error: ${esc(e.message)}</td></tr>`;
+  }
+}
+
+async function pushCurrentToGcs() {
+  setStatus('versionsStatus', 'Pushing to GCS…', 'info');
+  try {
+    const r = await fetch('/admin/guidelines/push-to-gcs', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({}),
+    });
+    if (r.status === 401) { doLogout(); return; }
+    const d = await r.json();
+    if (d.success) {
+      setStatus('versionsStatus', `☁ Pushed version ${d.version} to GCS as ${d.filename}.`, 'ok');
+      toast('Pushed to GCS!');
+      loadVersions();
+    } else {
+      setStatus('versionsStatus', '✗ Push failed: ' + (d.error || 'unknown'), 'err');
+    }
+  } catch(e) {
+    setStatus('versionsStatus', 'Request failed: ' + e.message, 'err');
+  }
+}
+
+async function previewVersion(filename) {
+  const pane  = document.getElementById('versionPreviewPane');
+  const title = document.getElementById('versionPreviewTitle');
+  const ta    = document.getElementById('versionPreviewYaml');
+  title.textContent = `Preview: ${filename}`;
+  ta.value = 'Loading…';
+  pane.style.display = 'block';
+  pane.scrollIntoView({behavior: 'smooth'});
+
+  try {
+    const r = await fetch(`/admin/guidelines/version/${encodeURIComponent(filename)}`);
+    if (r.status === 401) { doLogout(); return; }
+    const d = await r.json();
+    ta.value = d.yaml || '(empty)';
+  } catch(e) {
+    ta.value = 'Error loading version: ' + e.message;
+  }
+}
+
+function closeVersionPreview() {
+  document.getElementById('versionPreviewPane').style.display = 'none';
+}
+
+async function revertVersion(filename, version) {
+  if (!confirm(`Revert active guidelines to version ${version} (${filename})?\n\nThis will update both GCS and disk.`)) return;
+  setStatus('versionsStatus', `Reverting to ${version}…`, 'info');
+  try {
+    const r = await fetch('/admin/guidelines/revert', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({filename}),
+    });
+    if (r.status === 401) { doLogout(); return; }
+    const d = await r.json();
+    if (d.success) {
+      setStatus('versionsStatus',
+        `✓ Reverted to version ${d.version}. ` +
+        (d.disk_synced ? 'Disk synced.' : 'Note: disk sync failed — push manually.'),
+        'ok');
+      toast(`Reverted to ${version}!`);
+      loadVersions();
+      // Reload YAML editor too
+      loadYaml();
+    } else {
+      setStatus('versionsStatus', '✗ Revert failed: ' + (d.error || 'unknown'), 'err');
+    }
+  } catch(e) {
+    setStatus('versionsStatus', 'Request failed: ' + e.message, 'err');
+  }
+}
+
+// ── Changelog tab ──────────────────────────────────────────────────
+async function loadChangelog() {
+  const tbody = document.getElementById('changelogBody');
+  tbody.innerHTML = '<tr><td colspan="4" style="color:#7a8aa8;padding:20px;">Loading…</td></tr>';
+  try {
+    const r = await fetch('/guidelines/changelog');
+    const d = await r.json();
+    const entries = (d.changelog || []).slice().reverse();
+    if (!entries.length) {
+      tbody.innerHTML = '<tr><td colspan="4" style="color:#7a8aa8;padding:20px;">No changelog entries.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = entries.map(e => `
+      <tr>
+        <td><strong>${esc(e.version || '—')}</strong></td>
+        <td>${esc(e.date || '—')}</td>
+        <td>${esc(e.author || '—')}</td>
+        <td>${esc(e.changes || '—')}</td>
+      </tr>
+    `).join('');
+  } catch(e) {
+    tbody.innerHTML = `<tr><td colspan="4" style="color:#ff5c6a;padding:20px;">Error: ${esc(e.message)}</td></tr>`;
+  }
+}
+
+// ── Settings tab ───────────────────────────────────────────────────
+async function changeCredentials() {
+  const user = document.getElementById('newUser').value.trim();
+  const pass = document.getElementById('newPass').value;
+  const conf = document.getElementById('confPass').value;
+  setStatus('credStatus', 'Updating…', 'info');
+  try {
+    const r = await fetch('/admin/credentials', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({username: user, password: pass, confirm_password: conf}),
+    });
+    if (r.status === 401) { doLogout(); return; }
+    const d = await r.json();
+    if (d.updated) {
+      setStatus('credStatus', `✓ Credentials updated. New username: ${d.username}`, 'ok');
+      document.getElementById('topbarUser').textContent = '👤 ' + d.username;
+      document.getElementById('newPass').value  = '';
+      document.getElementById('confPass').value = '';
+      toast('Credentials updated!');
+    } else {
+      setStatus('credStatus', '✗ ' + (d.error || 'Update failed.'), 'err');
+    }
+  } catch(e) {
+    setStatus('credStatus', 'Request failed: ' + e.message, 'err');
+  }
+}
+
+async function reloadGuidelines() {
+  setStatus('reloadStatus', 'Reloading…', 'info');
+  try {
+    const r = await fetch('/admin/reload-guidelines', {method: 'POST'});
+    const d = await r.json();
+    if (d.reloaded) {
+      setStatus('reloadStatus', `✓ Reloaded (version ${d.version || 'unknown'}).`, 'ok');
+      toast('Guidelines reloaded!');
+    } else {
+      setStatus('reloadStatus', '✗ Reload failed: ' + (d.errors || []).join('; '), 'err');
+    }
+  } catch(e) {
+    setStatus('reloadStatus', 'Request failed: ' + e.message, 'err');
+  }
+}
+</script>
+</body>
+</html>
