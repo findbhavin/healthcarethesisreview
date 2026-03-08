@@ -329,6 +329,50 @@ output_format: |
   END OF REVIEW REPORT
   ---
 
+  After the review report, produce the following Author Revision Report.
+  Map ALL findings from your stage review to the relevant manuscript sections.
+  Number each comment sequentially within its section.
+  Mark each as MAJOR (must fix before acceptance), MINOR (should fix), or INFO (noted for awareness).
+  Be specific and actionable — quote the relevant manuscript text where helpful.
+  If a section has no comments, write NONE.
+
+  AUTHOR REVISION REPORT
+  Consolidated Review Comments for Author Response
+
+  SECTION 1 — TITLE
+  [e.g. 1. MAJOR: The title does not specify the study design. Add "cross-sectional study".]
+
+  SECTION 2 — KEYWORDS
+  [e.g. 1. MINOR: Replace non-MeSH term "sugar" with "Dietary Sugars".]
+
+  SECTION 3 — ABSTRACT
+  [Numbered comments on structured abstract completeness, accuracy, word count, etc.]
+
+  SECTION 4 — INTRODUCTION
+  [Numbered comments on background clarity, rationale, research question, literature gaps.]
+
+  SECTION 5 — METHODS
+  [Numbered comments on study design, sampling, inclusion/exclusion criteria, statistics, reporting checklists.]
+
+  SECTION 6 — RESULTS
+  [Numbered comments on data presentation, table/figure accuracy, statistical completeness, inconsistencies.]
+
+  SECTION 7 — DISCUSSION AND CONCLUSIONS
+  [Numbered comments on interpretation, overclaiming, limitations, clinical significance, future directions.]
+
+  SECTION 8 — REFERENCES
+  [Numbered comments on uncited claims, reference formatting, fabricated or irrelevant citations.]
+
+  SECTION 9 — TABLES AND FIGURES
+  [Numbered comments on clarity, labels, legends, consistency with text.]
+
+  SECTION 10 — GENERAL AND MANUSCRIPT-WIDE COMMENTS
+  [Numbered comments on language, ethics, declarations, overall presentation.]
+
+  ---
+  END OF AUTHOR REVISION REPORT
+  ---
+
 # ---------------------------------------------------------------------------
 # JOURNAL-SPECIFIC OVERRIDES
 # ---------------------------------------------------------------------------

@@ -476,6 +476,698 @@ def _build_scorecard(review_result: dict, styles) -> list:
     return story
 
 
+def _build_section_findings_table(review_result: dict, styles) -> list:
+    """
+    Build a compact "Section-by-Section Review Summary" table.
+
+    Columns: Stage | Section Finding | Priority | Score
+    One row per MAJOR / MINOR / SUGGESTION item extracted from the review text.
+    Placed after the scorecard, before the detailed stage bodies.
+    """
+    review_text  = review_result.get("review_text", "")
+    stage_scores = review_result.get("stage_scores") or {}
+    items = _extract_revision_items(review_text)
+    if not items:
+        return []
+
+    h2_style = ParagraphStyle(
+        "SFT_H2", parent=styles["Heading2"],
+        textColor=C_BLUE, fontSize=12, spaceBefore=14, spaceAfter=6,
+    )
+    cell_hdr = ParagraphStyle(
+        "SFT_Hdr", parent=styles["Normal"],
+        fontSize=9, fontName="Helvetica-Bold", textColor=C_WHITE,
+    )
+    cell_sml = ParagraphStyle(
+        "SFT_Sml", parent=styles["Normal"],
+        fontSize=8.5, leading=12,
+    )
+    cell_pri_maj = ParagraphStyle("SFT_Maj", parent=styles["Normal"],
+                                   fontSize=8, fontName="Helvetica-Bold", textColor=C_MAJOR)
+    cell_pri_min = ParagraphStyle("SFT_Min", parent=styles["Normal"],
+                                   fontSize=8, fontName="Helvetica-Bold", textColor=C_AMBER)
+    cell_pri_sug = ParagraphStyle("SFT_Sug", parent=styles["Normal"],
+                                   fontSize=8, fontName="Helvetica-Bold", textColor=C_SUGGEST)
+    cell_sc  = ParagraphStyle(
+        "SFT_Sc", parent=styles["Normal"],
+        fontSize=8, alignment=TA_CENTER,
+    )
+
+    def pri_style(p):
+        if p == "MAJOR":      return cell_pri_maj
+        if p == "MINOR":      return cell_pri_min
+        return cell_pri_sug
+
+    def pri_color(p):
+        if p == "MAJOR":      return C_MAJOR
+        if p == "MINOR":      return C_AMBER
+        if p == "SUGGESTION": return C_SUGGEST
+        return C_DARK
+
+    # stage label → (short label, stage number)
+    _label_to_num = {
+        "Stage 1": 1, "Stage 2": 2, "Stage 3": 3, "Stage 4": 4,
+        "Stage 5": 5, "Stage 6": 6, "Stage 7": 7, "Stage 8": 8,
+    }
+
+    story = []
+    story.append(Paragraph("Section-by-Section Review Summary", h2_style))
+    story.append(HRFlowable(width="100%", thickness=0.8, color=C_BLUE_LIGHT, spaceAfter=6))
+
+    # Header row
+    tbl_data = [[
+        Paragraph("<b>Stage</b>", cell_hdr),
+        Paragraph("<b>Finding / Comment</b>", cell_hdr),
+        Paragraph("<b>Priority</b>", cell_hdr),
+        Paragraph("<b>Stage Score</b>", cell_hdr),
+    ]]
+
+    prev_stage = None
+    for item in items:
+        sec_label = item["section"]       # e.g. "Stage 3 — Methodology"
+        priority  = item["priority"]
+        comment   = item["comment"]
+
+        # Extract stage number from the label
+        stage_num = None
+        for lbl, num in _label_to_num.items():
+            if sec_label.startswith(lbl):
+                stage_num = num
+                break
+
+        # Score cell — show only on first row for each stage (row-span look)
+        if stage_num and stage_num != prev_stage:
+            sc = stage_scores.get(stage_num)
+            if sc is not None and stage_num != 8:
+                sc_color = _score_color(sc)
+                score_text = f'<font color="{sc_color.hexval()}"><b>{sc}/10</b></font>'
+            else:
+                score_text = "—"
+            prev_stage = stage_num
+        else:
+            score_text = ""
+
+        # Stage short label
+        short = sec_label.split(" — ", 1)[-1] if " — " in sec_label else sec_label
+
+        tbl_data.append([
+            Paragraph(_esc(short), cell_sml),
+            Paragraph(_esc(comment), cell_sml),
+            Paragraph(
+                f'<font color="{pri_color(priority).hexval()}"><b>{priority}</b></font>',
+                pri_style(priority),
+            ),
+            Paragraph(score_text, cell_sc),
+        ])
+
+    # Table — col widths to fit A4 body (15.5 cm usable)
+    col_w = [3.5*cm, 8.0*cm, 2.0*cm, 2.0*cm]
+    tbl = Table(tbl_data, colWidths=col_w, repeatRows=1)
+    tbl.setStyle(TableStyle([
+        ("BACKGROUND",     (0, 0), (-1, 0), C_BLUE),
+        ("TEXTCOLOR",      (0, 0), (-1, 0), C_WHITE),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [C_WHITE, C_BLUE_BG]),
+        ("GRID",           (0, 0), (-1, -1), 0.3, colors.HexColor("#B0C8E0")),
+        ("VALIGN",         (0, 0), (-1, -1), "TOP"),
+        ("ALIGN",          (2, 0), (2, -1), "CENTER"),
+        ("ALIGN",          (3, 0), (3, -1), "CENTER"),
+        ("TOPPADDING",     (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING",  (0, 0), (-1, -1), 5),
+        ("LEFTPADDING",    (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING",   (0, 0), (-1, -1), 6),
+    ]))
+    story.append(tbl)
+    story.append(Spacer(1, 14))
+    return story
+
+
+def _extract_revision_items(review_text: str) -> list[dict]:
+    """
+    Parse the review text and extract all actionable findings into a flat list:
+      [{"section": "STAGE 3: Methodology Review",
+        "comment": "No power calculation provided.",
+        "priority": "MAJOR"},  ...]
+
+    Covers MAJOR / MINOR / SUGGESTION tags and numbered items from
+    "Key Required Revisions" in Stage 8.
+    """
+    items = []
+    stages = _split_into_stages(review_text)
+    sev_re = re.compile(r"^\[?(MAJOR|MINOR|SUGGESTION)\]?\s*[-:]?\s*(.+)", re.IGNORECASE)
+    numbered_re = re.compile(r"^\d+\.\s+(.+)")
+
+    stage_display = {
+        "STAGE 1": "Stage 1 — Initial Editorial Screening",
+        "STAGE 2": "Stage 2 — Scope & Novelty",
+        "STAGE 3": "Stage 3 — Methodology",
+        "STAGE 4": "Stage 4 — Results & Data Integrity",
+        "STAGE 5": "Stage 5 — Discussion & Conclusions",
+        "STAGE 6": "Stage 6 — References",
+        "STAGE 7": "Stage 7 — Ethics & Integrity",
+        "STAGE 8": "Stage 8 — Overall Recommendation",
+    }
+
+    for stage_key in STAGE_HEADERS:
+        block = stages.get(stage_key, "")
+        if not block:
+            continue
+        section_label = stage_display.get(stage_key, stage_key)
+
+        for line in block.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+
+            m = sev_re.match(stripped)
+            if m:
+                sev = m.group(1).upper()
+                comment = m.group(2).strip()
+                if comment:
+                    items.append({
+                        "section": section_label,
+                        "comment": comment,
+                        "priority": sev,
+                    })
+                continue
+
+            # Numbered items inside "Key Required Revisions" (Stage 8)
+            if stage_key == "STAGE 8":
+                m2 = numbered_re.match(stripped)
+                if m2:
+                    items.append({
+                        "section": section_label,
+                        "comment": m2.group(1).strip(),
+                        "priority": "MAJOR",
+                    })
+
+    return items
+
+
+def _priority_color(priority: str):
+    p = priority.upper()
+    if p == "MAJOR":       return C_MAJOR
+    if p == "MINOR":       return C_AMBER
+    if p in ("SUGGESTION", "INFO"):  return C_SUGGEST
+    return C_DARK
+
+
+# Maps manuscript sections → review stages (shown in Author Revision Report)
+_SECTION_TO_STAGE = {
+    "SECTION 1 — TITLE":                            "Stage 1 — Initial Editorial Screening",
+    "SECTION 2 — KEYWORDS":                         "Stage 1 — Initial Editorial Screening",
+    "SECTION 3 — ABSTRACT":                         "Stage 1 — Initial Editorial Screening",
+    "SECTION 4 — INTRODUCTION":                     "Stage 2 — Scope & Novelty",
+    "SECTION 5 — METHODS":                          "Stage 3 — Methodology Review",
+    "SECTION 6 — RESULTS":                          "Stage 4 — Results & Data Integrity",
+    "SECTION 7 — DISCUSSION AND CONCLUSIONS":       "Stage 5 — Discussion & Conclusions",
+    "SECTION 8 — REFERENCES":                       "Stage 6 — References",
+    "SECTION 9 — TABLES AND FIGURES":               "Stage 4 — Results & Data Integrity",
+    "SECTION 10 — GENERAL AND MANUSCRIPT-WIDE COMMENTS": "Stages 7 & 8 — Ethics & Overall Recommendation",
+}
+
+# Canonical section order matching the Author_Revision_Report_Form.docx
+_MANUSCRIPT_SECTIONS = [
+    "SECTION 1 — TITLE",
+    "SECTION 2 — KEYWORDS",
+    "SECTION 3 — ABSTRACT",
+    "SECTION 4 — INTRODUCTION",
+    "SECTION 5 — METHODS",
+    "SECTION 6 — RESULTS",
+    "SECTION 7 — DISCUSSION AND CONCLUSIONS",
+    "SECTION 8 — REFERENCES",
+    "SECTION 9 — TABLES AND FIGURES",
+    "SECTION 10 — GENERAL AND MANUSCRIPT-WIDE COMMENTS",
+]
+
+_RE_MS_SECTION = re.compile(
+    r"SECTION\s+(\d+)\s*[—\-–]+\s*(.+)", re.IGNORECASE
+)
+_RE_MS_ITEM = re.compile(
+    r"^\d+\.\s+(MAJOR|MINOR|INFO|SUGGESTION)\s*:\s*(.+)", re.IGNORECASE
+)
+
+
+def _extract_manuscript_section_items(review_text: str) -> dict[str, list[dict]]:
+    """
+    Parse the AUTHOR REVISION REPORT block from the review text.
+    Returns an OrderedDict keyed by canonical section label, each value a list of:
+      {"number": int, "priority": str, "comment": str}
+
+    If no AUTHOR REVISION REPORT block is found, returns an empty dict.
+    """
+    from collections import OrderedDict
+
+    # Find the AUTHOR REVISION REPORT block
+    start_m = re.search(r"AUTHOR REVISION REPORT", review_text, re.IGNORECASE)
+    if not start_m:
+        return {}
+    end_m = re.search(r"END OF AUTHOR REVISION REPORT", review_text, re.IGNORECASE)
+    block = review_text[start_m.end(): end_m.start() if end_m else len(review_text)]
+
+    result: dict[str, list[dict]] = OrderedDict()
+    current_section = None
+    item_counter = 0
+
+    for line in block.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        # Check for a SECTION N — heading
+        sec_m = _RE_MS_SECTION.match(stripped)
+        if sec_m:
+            # Normalise to canonical form
+            sec_num = int(sec_m.group(1))
+            canonical = next(
+                (s for s in _MANUSCRIPT_SECTIONS if s.startswith(f"SECTION {sec_num} ")),
+                f"SECTION {sec_num} — {sec_m.group(2).strip().upper()}"
+            )
+            current_section = canonical
+            item_counter = 0
+            result.setdefault(current_section, [])
+            continue
+
+        if current_section is None:
+            continue
+
+        # Skip "NONE" lines
+        if stripped.upper() == "NONE":
+            continue
+
+        # Parse a numbered comment line: "1. MAJOR: ..."
+        item_m = _RE_MS_ITEM.match(stripped)
+        if item_m:
+            priority = item_m.group(1).upper()
+            if priority == "SUGGESTION":
+                priority = "INFO"
+            comment = item_m.group(2).strip()
+            if comment:
+                item_counter += 1
+                result[current_section].append({
+                    "number": item_counter,
+                    "priority": priority,
+                    "comment": comment,
+                })
+        else:
+            # Continuation line or plain text — append to last item if any
+            if result[current_section]:
+                result[current_section][-1]["comment"] += " " + stripped
+
+    # Remove sections with no items
+    return OrderedDict((k, v) for k, v in result.items() if v)
+
+
+def _build_author_revision_report(review_result: dict, story: list, styles,
+                                  h2_style, h3_style, body_style,
+                                  label_style, value_style) -> None:
+    """
+    Append the Author Revision Report section to `story`.
+
+    Organises all review comments by MANUSCRIPT SECTION (Title, Keywords,
+    Abstract, Introduction, Methods, Results, Discussion, References,
+    Tables/Figures, General) — matching the NJCM Author_Revision_Report_Form.
+
+    Comments are sourced from the structured AUTHOR REVISION REPORT block that
+    Claude emits at the end of its review (driven by output_format in the YAML).
+    Falls back to stage-based extraction if no such block is present.
+    """
+    from collections import OrderedDict
+    from reportlab.platypus import PageBreak
+
+    review_text = review_result.get("review_text", "")
+
+    # ── Prefer manuscript-section items from the AUTHOR REVISION REPORT block
+    sections_map = _extract_manuscript_section_items(review_text)
+
+    # Fall back: extract from stage blocks (legacy / if Claude omits the ARR block)
+    if not sections_map:
+        stage_items = _extract_revision_items(review_text)
+        if not stage_items:
+            return
+        for item in stage_items:
+            sec = item["section"]
+            sections_map.setdefault(sec, []).append({
+                "number": len(sections_map.get(sec, [])) + 1,
+                "priority": item["priority"],
+                "comment": item["comment"],
+            })
+
+    if not sections_map:
+        return
+
+    manuscript_title = review_result.get("manuscript_title", "—")
+    decision         = review_result.get("decision", "—")
+    dec_color        = _decision_color(decision)
+
+    small_style = ParagraphStyle(
+        "ARSmall", parent=styles["Normal"],
+        fontSize=8.5, leading=12, spaceAfter=1,
+    )
+    response_style = ParagraphStyle(
+        "ARResp", parent=styles["Normal"],
+        fontSize=8, leading=11, textColor=colors.HexColor("#777777"),
+        fontName="Helvetica-Oblique",
+    )
+    cell_label = ParagraphStyle(
+        "ARCellLbl", parent=styles["Normal"],
+        fontSize=8.5, fontName="Helvetica-Bold",
+    )
+    priority_style_maj = ParagraphStyle(
+        "ARPriMaj", parent=styles["Normal"],
+        fontSize=8, fontName="Helvetica-Bold", textColor=C_MAJOR,
+    )
+    priority_style_min = ParagraphStyle(
+        "ARPriMin", parent=styles["Normal"],
+        fontSize=8, fontName="Helvetica-Bold", textColor=C_AMBER,
+    )
+    priority_style_sug = ParagraphStyle(
+        "ARPriSug", parent=styles["Normal"],
+        fontSize=8, fontName="Helvetica-Bold", textColor=C_SUGGEST,
+    )
+    instr_style = ParagraphStyle(
+        "ARInstr", parent=styles["Normal"],
+        fontSize=8.5, leading=13, spaceAfter=2,
+    )
+
+    def prio_style(p):
+        if p == "MAJOR":  return priority_style_maj
+        if p == "MINOR":  return priority_style_min
+        return priority_style_sug
+
+    # ── New page + header ──────────────────────────────────────────────────
+    story.append(PageBreak())
+    story.append(Paragraph("AUTHOR REVISION REPORT", h2_style))
+    story.append(Paragraph(
+        "Consolidated Review Comments for Author Response — NJCM Editorial Office",
+        ParagraphStyle("ARSub", parent=styles["Normal"],
+                       fontSize=9, textColor=C_GREY, fontName="Helvetica-Oblique",
+                       spaceAfter=10),
+    ))
+    story.append(HRFlowable(width="100%", thickness=1.5, color=C_BLUE, spaceAfter=10))
+
+    # ── Manuscript info table ──────────────────────────────────────────────
+    ms_info = [
+        [Paragraph("Manuscript Title", label_style),
+         Paragraph(_esc(manuscript_title), value_style)],
+        [Paragraph("Editorial Decision", label_style),
+         Paragraph(f'<font color="{dec_color.hexval()}"><b>{_esc(decision)}</b></font>',
+                   value_style)],
+    ]
+    ms_table = Table(ms_info, colWidths=[4*cm, 11.5*cm])
+    ms_table.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (0, -1), C_BLUE_LIGHT),
+        ("BACKGROUND",    (1, 0), (1, -1), C_BLUE_BG),
+        ("GRID",          (0, 0), (-1, -1), 0.4, colors.HexColor("#B0C8E0")),
+        ("VALIGN",        (0, 0), (-1, -1), "TOP"),
+        ("TOPPADDING",    (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 8),
+        ("RIGHTPADDING",  (0, 0), (-1, -1), 8),
+    ]))
+    story.append(ms_table)
+    story.append(Spacer(1, 12))
+
+    # ── Instructions ──────────────────────────────────────────────────────
+    instructions = [
+        "1. All comments in this form must be addressed in your revised manuscript.",
+        "2. Complete the Author Response column for EVERY numbered comment.",
+        "3. Indicate the page and line number of the revision made.",
+        "4. Priority levels — MAJOR: must be addressed; MINOR: should be addressed; "
+        "INFO: noted for awareness, response encouraged.",
+        "5. Submit your revised manuscript along with this completed form.",
+        "6. If you disagree with a comment, provide a clear scientific justification.",
+    ]
+    story.append(Paragraph("<b>Instructions to Authors</b>", h3_style))
+    for instr in instructions:
+        story.append(Paragraph(f"&#x25B8; {_esc(instr)}", instr_style))
+    story.append(Spacer(1, 10))
+
+    # ── Priority legend ────────────────────────────────────────────────────
+    legend_data = [
+        [Paragraph("<b>Priority</b>", cell_label),
+         Paragraph("<b>Meaning</b>", cell_label)],
+        [Paragraph('<font color="#CC0000"><b>MAJOR</b></font>', small_style),
+         Paragraph("Must be addressed — may cause rejection if not resolved", small_style)],
+        [Paragraph('<font color="#B86E00"><b>MINOR</b></font>', small_style),
+         Paragraph("Should be addressed — justify if not done", small_style)],
+        [Paragraph('<font color="#007000"><b>INFO</b></font>', small_style),
+         Paragraph("Noted for awareness — response encouraged", small_style)],
+    ]
+    legend_table = Table(legend_data, colWidths=[3*cm, 12.5*cm])
+    legend_table.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, 0), C_BLUE),
+        ("TEXTCOLOR",     (0, 0), (-1, 0), C_WHITE),
+        ("BACKGROUND",    (0, 1), (-1, -1), C_BLUE_BG),
+        ("GRID",          (0, 0), (-1, -1), 0.4, colors.HexColor("#B0C8E0")),
+        ("VALIGN",        (0, 0), (-1, -1), "TOP"),
+        ("TOPPADDING",    (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 7),
+        ("RIGHTPADDING",  (0, 0), (-1, -1), 7),
+    ]))
+    story.append(legend_table)
+    story.append(Spacer(1, 14))
+
+    # ── Per manuscript section comment tables ──────────────────────────────
+    col_w_table = [1*cm, 8.5*cm, 2*cm, 4*cm]  # No. | Comment | Priority | Author Response
+
+    stage_ref_style = ParagraphStyle(
+        "ARStageRef", parent=styles["Normal"],
+        fontSize=8, textColor=C_GREY, fontName="Helvetica-Oblique",
+        spaceBefore=0, spaceAfter=4,
+    )
+
+    for section_label, sec_items in sections_map.items():
+        story.append(Paragraph(f"<b>{_esc(section_label)}</b>", h3_style))
+        # Show which review stage this manuscript section maps to
+        stage_ref = _SECTION_TO_STAGE.get(section_label)
+        if stage_ref:
+            story.append(Paragraph(f"Relates to: {_esc(stage_ref)}", stage_ref_style))
+
+        tbl_data = [[
+            Paragraph("<b>No.</b>", cell_label),
+            Paragraph("<b>Comment / Revision Required</b>", cell_label),
+            Paragraph("<b>Priority</b>", cell_label),
+            Paragraph(
+                "<b>Author Response</b><br/><font size='7'>(page &amp; line no.)</font>",
+                cell_label,
+            ),
+        ]]
+
+        for item in sec_items:
+            priority = item["priority"]
+            pc_hex = _priority_color(priority).hexval()
+            tbl_data.append([
+                Paragraph(str(item["number"]), small_style),
+                Paragraph(_esc(item["comment"]), small_style),
+                Paragraph(
+                    f'<font color="{pc_hex}"><b>{_esc(priority)}</b></font>',
+                    prio_style(priority),
+                ),
+                Paragraph("", response_style),
+            ])
+
+        tbl = Table(tbl_data, colWidths=col_w_table, repeatRows=1)
+        tbl.setStyle(TableStyle([
+            ("BACKGROUND",     (0, 0), (-1, 0), C_BLUE),
+            ("TEXTCOLOR",      (0, 0), (-1, 0), C_WHITE),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [C_WHITE, C_BLUE_BG]),
+            ("GRID",           (0, 0), (-1, -1), 0.4, colors.HexColor("#B0C8E0")),
+            ("VALIGN",         (0, 0), (-1, -1), "TOP"),
+            ("ALIGN",          (0, 0), (0, -1), "CENTER"),
+            ("ALIGN",          (2, 0), (2, -1), "CENTER"),
+            ("TOPPADDING",     (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING",  (0, 0), (-1, -1), 18),
+            ("LEFTPADDING",    (0, 0), (-1, -1), 6),
+            ("RIGHTPADDING",   (0, 0), (-1, -1), 6),
+            ("TOPPADDING",     (0, 0), (-1, 0), 4),
+            ("BOTTOMPADDING",  (0, 0), (-1, 0), 4),
+        ]))
+        story.append(tbl)
+        story.append(Spacer(1, 14))
+
+    # ── Footer ─────────────────────────────────────────────────────────────
+    story.append(HRFlowable(width="100%", thickness=0.8, color=C_BLUE_LIGHT,
+                            spaceBefore=10, spaceAfter=8))
+    story.append(Paragraph(
+        "Please submit this completed form with your revised manuscript "
+        "via the journal's online submission system.",
+        ParagraphStyle("ARFooter", parent=styles["Normal"],
+                       fontSize=8.5, textColor=C_GREY,
+                       fontName="Helvetica-Oblique", alignment=1),
+    ))
+    story.append(Spacer(1, 6))
+    story.append(Paragraph(
+        "Author Revision Report  |  Form v3.0  |  AI-Assisted Editorial Review System",
+        ParagraphStyle("ARFooter2", parent=styles["Normal"],
+                       fontSize=7.5, textColor=C_GREY,
+                       fontName="Helvetica-Oblique", alignment=1),
+    ))
+
+
+def _build_concluding_remarks(review_result: dict, story: list, styles,
+                              h2_style, h3_style, body_style) -> None:
+    """
+    Append a 'Concluding Remarks' section to `story`.
+
+    Includes:
+      • Editorial decision (colour-coded)
+      • Summary narrative (from Stage 8)
+      • What the author must address (Key Required Revisions)
+      • What the author should consider (MINOR/SUGGESTION items summary)
+      • Note about resubmission being treated as a fresh review
+    """
+    from reportlab.platypus import PageBreak
+
+    review_text = review_result.get("review_text", "")
+    decision    = review_result.get("decision", "—")
+    dec_color   = _decision_color(decision)
+
+    # Parse Stage 8 for summary and key revisions
+    stages = _split_into_stages(review_text)
+    stage8_text = stages.get("STAGE 8", "")
+
+    summary_text = ""
+    key_revisions: list[str] = []
+    in_revisions = False
+
+    for line in stage8_text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.lower().startswith("summary:"):
+            summary_text = stripped.split(":", 1)[1].strip()
+        elif re.match(r"key required revisions", stripped, re.IGNORECASE):
+            in_revisions = True
+        elif in_revisions and re.match(r"\d+\.", stripped):
+            rev = re.sub(r"^\d+\.\s*", "", stripped)
+            if rev:
+                key_revisions.append(rev)
+        elif in_revisions and stripped.startswith("-"):
+            rev = stripped.lstrip("-").strip()
+            if rev:
+                key_revisions.append(rev)
+
+    # Styles
+    decision_box_style = ParagraphStyle(
+        "CRDecision", parent=styles["Normal"],
+        fontSize=13, fontName="Helvetica-Bold",
+        spaceBefore=8, spaceAfter=8,
+    )
+    summary_style = ParagraphStyle(
+        "CRSummary", parent=body_style,
+        fontSize=10, leading=16, spaceAfter=6,
+        fontName="Helvetica-Oblique",
+    )
+    bullet_style = ParagraphStyle(
+        "CRBullet", parent=body_style,
+        fontSize=9.5, leading=14, spaceAfter=4,
+        leftIndent=14, firstLineIndent=-10,
+    )
+    note_style = ParagraphStyle(
+        "CRNote", parent=body_style,
+        fontSize=9, textColor=C_GREY,
+        fontName="Helvetica-Oblique", spaceBefore=14, spaceAfter=4,
+        borderPad=8,
+    )
+    small_label = ParagraphStyle(
+        "CRSmallLbl", parent=styles["Normal"],
+        fontSize=10, fontName="Helvetica-Bold",
+        textColor=C_BLUE, spaceBefore=12, spaceAfter=4,
+    )
+
+    story.append(PageBreak())
+    story.append(Paragraph("Concluding Remarks", h2_style))
+    story.append(HRFlowable(width="100%", thickness=1.5, color=C_BLUE, spaceAfter=12))
+
+    # Decision badge
+    story.append(Paragraph(
+        f'Editorial Decision: <font color="{dec_color.hexval()}"><b>{_esc(decision)}</b></font>',
+        decision_box_style,
+    ))
+
+    # Summary
+    if summary_text:
+        story.append(Paragraph(f'<i>{_esc(summary_text)}</i>', summary_style))
+    story.append(Spacer(1, 8))
+
+    # What the author must address
+    if key_revisions:
+        story.append(Paragraph("What the Author Must Address", small_label))
+        story.append(HRFlowable(width="100%", thickness=0.5, color=C_BLUE_LIGHT, spaceAfter=6))
+        for idx, rev in enumerate(key_revisions, 1):
+            story.append(Paragraph(
+                f'<font color="{C_MAJOR.hexval()}"><b>{idx}.</b></font> {_esc(rev)}',
+                bullet_style,
+            ))
+        story.append(Spacer(1, 8))
+
+    # MAJOR items from all stages (if no key revisions were parsed)
+    if not key_revisions:
+        major_items = [
+            item for item in _extract_revision_items(review_text)
+            if item["priority"] == "MAJOR"
+        ]
+        if major_items:
+            story.append(Paragraph("What the Author Must Address", small_label))
+            story.append(HRFlowable(width="100%", thickness=0.5, color=C_BLUE_LIGHT, spaceAfter=6))
+            for idx, item in enumerate(major_items, 1):
+                story.append(Paragraph(
+                    f'<font color="{C_MAJOR.hexval()}"><b>{idx}.</b></font> '
+                    f'<b>[{_esc(item["section"].split(" — ")[-1])}]</b> {_esc(item["comment"])}',
+                    bullet_style,
+                ))
+            story.append(Spacer(1, 8))
+
+    # Optional improvements
+    minor_items = [
+        item for item in _extract_revision_items(review_text)
+        if item["priority"] in ("MINOR", "SUGGESTION")
+    ]
+    if minor_items:
+        story.append(Paragraph("What the Author Should Consider", small_label))
+        story.append(HRFlowable(width="100%", thickness=0.5, color=C_BLUE_LIGHT, spaceAfter=6))
+        for item in minor_items[:8]:  # cap at 8 to keep this concise
+            story.append(Paragraph(
+                f'<font color="{C_AMBER.hexval()}">&#x25B8;</font> {_esc(item["comment"])}',
+                bullet_style,
+            ))
+        if len(minor_items) > 8:
+            story.append(Paragraph(
+                f"<i>…and {len(minor_items) - 8} additional minor comment(s) — "
+                "see Author Revision Report above for full details.</i>",
+                ParagraphStyle("CRMore", parent=body_style, fontSize=8.5,
+                               textColor=C_GREY, fontName="Helvetica-Oblique"),
+            ))
+        story.append(Spacer(1, 8))
+
+    # Resubmission note
+    story.append(HRFlowable(width="100%", thickness=0.5, color=C_BLUE_LIGHT,
+                            spaceBefore=10, spaceAfter=10))
+    story.append(Paragraph(
+        "&#x1F4CC; <b>Note on Resubmission:</b>",
+        ParagraphStyle("NoteHdr", parent=styles["Normal"],
+                       fontSize=10, fontName="Helvetica-Bold",
+                       textColor=C_BLUE, spaceAfter=4),
+    ))
+    story.append(Paragraph(
+        "Authors are encouraged to address all comments and resubmit a revised manuscript. "
+        "The authors may optionally return for a new AI-assisted review after revisions are made; "
+        "however, any such resubmission will be treated as an entirely <b>fresh review</b> — "
+        "previous scores and comments will not carry over. This ensures an unbiased evaluation "
+        "of the revised work.",
+        note_style,
+    ))
+    story.append(Spacer(1, 6))
+    story.append(Paragraph(
+        "This report was generated by an AI-Assisted Editorial Review System and is intended "
+        "to support, not replace, human editorial judgment.",
+        ParagraphStyle("CRFooter", parent=styles["Normal"],
+                       fontSize=8, textColor=C_GREY,
+                       fontName="Helvetica-Oblique", alignment=1, spaceBefore=10),
+    ))
+
+
 def generate_report(review_result: dict) -> bytes:
     """
     Generate a PDF report from the review_result dict produced by run_review().
@@ -585,12 +1277,14 @@ def generate_report(review_result: dict) -> bytes:
     story.append(info_table)
     story.append(Spacer(1, 16))
 
-    # ── Weighted Review Score card ─────────────────────────────────────────
+    # ── SECTION 1: Overall Category-Wise Scoring ───────────────────────────
+    story.append(Paragraph("Section 1 — Overall Category-Wise Scoring", h2_style))
+    story.append(HRFlowable(width="100%", thickness=0.8, color=C_BLUE_LIGHT, spaceAfter=8))
     scorecard_items = _build_scorecard(review_result, styles)
     story.extend(scorecard_items)
 
-    # ── Stage sections ─────────────────────────────────────────────────────
-    story.append(Paragraph("Review Findings", h2_style))
+    # ── SECTION 2: Overall Review Narratives ───────────────────────────────
+    story.append(Paragraph("Section 2 — Overall Review Narratives", h2_style))
     story.append(HRFlowable(width="100%", thickness=0.8, color=C_BLUE_LIGHT, spaceAfter=8))
 
     stages = _split_into_stages(review_result.get("review_text",""))
@@ -701,13 +1395,13 @@ def generate_report(review_result: dict) -> bytes:
     except Exception:
         story.append(Paragraph("Guidelines metadata could not be loaded.", body_style))
 
-    # ── Footer ─────────────────────────────────────────────────────────────
-    story.append(Spacer(1, 20))
-    story.append(Paragraph(
-        "This report was generated by an AI-assisted peer review system. "
-        "It is intended to support, not replace, human editorial judgment.",
-        footer_style,
-    ))
+    # ── SECTION 3: Author Revision Report (section-wise action table) ───────
+    _build_author_revision_report(review_result, story, styles,
+                                  h2_style, h3_style, body_style, label_style, value_style)
+
+    # ── SECTION 4: Concluding Remarks ──────────────────────────────────────
+    _build_concluding_remarks(review_result, story, styles,
+                              h2_style, h3_style, body_style)
 
     doc.build(story, onFirstPage=_draw_page_footer, onLaterPages=_draw_page_footer)
     buf.seek(0)

@@ -39,22 +39,6 @@ from functools import wraps
 
 from flask import Flask, request, jsonify, send_file, Response, stream_with_context, session
 
-# Path to admin credentials file (JSON)
-_ADMIN_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "admin_config.json")
-
-
-def _load_admin_config() -> dict:
-    try:
-        with open(_ADMIN_CONFIG_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {"username": "admin", "password": "admin"}
-
-
-def _save_admin_config(cfg: dict) -> None:
-    with open(_ADMIN_CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, indent=2)
-
 from review_agent import run_review, extract_text, stream_review
 from report_generator import generate_report
 from gcs_uploader import (
@@ -72,7 +56,6 @@ from guidelines.guidelines_loader import (
     validate_guidelines,
     get_guidelines_raw,
     save_guidelines_yaml,
-    get_guidelines_version,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -80,17 +63,35 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB
-app.secret_key = os.environ.get("FLASK_SECRET_KEY", secrets.token_hex(32))
+# Secret key: override with FLASK_SECRET_KEY env var in production
+app.secret_key = os.environ.get("FLASK_SECRET_KEY") or secrets.token_hex(32)
+
+# ---------------------------------------------------------------------------
+# Admin credentials (stored in admin_config.json, editable at runtime)
+# ---------------------------------------------------------------------------
+_ADMIN_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "admin_config.json")
 
 
-def _admin_required(fn):
-    """Decorator: require an active admin session."""
-    @wraps(fn)
-    def wrapper(*args, **kwargs):
+def _load_admin_config() -> dict:
+    if os.path.exists(_ADMIN_CONFIG_PATH):
+        with open(_ADMIN_CONFIG_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {"username": "admin", "password": "prakash"}
+
+
+def _save_admin_config(config: dict) -> None:
+    with open(_ADMIN_CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2)
+
+
+def _admin_required(f):
+    """Decorator: require admin session on API routes."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
         if not session.get("admin_authenticated"):
-            return jsonify({"error": "Authentication required."}), 401
-        return fn(*args, **kwargs)
-    return wrapper
+            return jsonify({"error": "Authentication required.", "auth": False}), 401
+        return f(*args, **kwargs)
+    return decorated
 
 ALLOWED_EXTENSIONS = {"pdf", "docx", "txt"}
 
@@ -167,6 +168,8 @@ def review():
     Form fields:
       file         : required — PDF, DOCX, or TXT
       journal_name : optional — target journal (e.g. NJCM, BMJ, PLOS ONE)
+      article_type : optional — e.g. "original research", "RCT", "systematic review"
+      journal_tier : optional — e.g. "high-impact", "mid-tier specialist"
 
     Response: text/event-stream with JSON lines:
       data: {"type":"chunk","text":"..."}
@@ -185,22 +188,47 @@ def review():
         }), 400
 
     journal_name = request.form.get("journal_name", "").strip()
+    article_type = request.form.get("article_type", "").strip()
+    journal_tier = request.form.get("journal_tier", "").strip()
     file_bytes = file.read()
     filename = file.filename
-    logger.info(f"Received '{filename}' ({len(file_bytes):,} bytes) journal='{journal_name}'")
+    logger.info(
+        f"Received '{filename}' ({len(file_bytes):,} bytes) "
+        f"journal='{journal_name}' article_type='{article_type}' tier='{journal_tier}'"
+    )
+
+    # Assign review_id BEFORE the generator so the client can use it
+    # to resume/poll if the SSE connection drops mid-stream (e.g. phone lock).
+    review_id = str(uuid.uuid4())
+    _review_store[review_id] = {
+        "status": "running",
+        "accumulated_text": "",
+        "filename": filename,
+    }
 
     def generate():
-        review_id = str(uuid.uuid4())
-        for event in stream_review(file_bytes, filename, journal_name=journal_name):
-            if event["type"] == "done":
+        for event in stream_review(
+            file_bytes, filename,
+            journal_name=journal_name,
+            article_type=article_type,
+            journal_tier=journal_tier,
+        ):
+            if event["type"] == "chunk":
+                # Accumulate text so poll endpoint can return partial progress
+                _review_store[review_id]["accumulated_text"] += event["text"]
+                yield f"data: {json.dumps(event)}\n\n"
+
+            elif event["type"] == "done":
                 result = event["result"]
-                _review_store[review_id] = result
+                result["status"] = "done"
+                _review_store[review_id].update(result)
 
                 # Generate PDF and upload to GCS for persistent offline access
                 gcs_url = None
                 try:
                     pdf_bytes = generate_report(result)
                     gcs_url = upload_report(review_id, pdf_bytes, result["manuscript_title"])
+                    _review_store[review_id]["gcs_url"] = gcs_url
                 except Exception as exc:
                     logger.warning(f"PDF/GCS step failed (non-fatal): {exc}")
 
@@ -217,6 +245,7 @@ def review():
                 if gcs_url:
                     payload["gcs_url"] = gcs_url
                 yield f"data: {json.dumps(payload)}\n\n"
+
             else:
                 yield f"data: {json.dumps(event)}\n\n"
 
@@ -226,6 +255,9 @@ def review():
         headers={
             "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",
+            # review_id in header lets the client store it before any body
+            # arrives — used for reconnect/poll if the stream drops (phone lock)
+            "X-Review-Id": review_id,
         },
     )
 
@@ -261,6 +293,50 @@ def download_report(review_id: str):
     except Exception as e:
         logger.exception("Failed to generate PDF report")
         return jsonify({"error": f"Report generation failed: {e}"}), 500
+
+
+# ---------------------------------------------------------------------------
+# Review poll endpoint — for reconnecting after network drops
+# ---------------------------------------------------------------------------
+
+@app.route("/review/<review_id>/poll", methods=["GET"])
+def poll_review(review_id: str):
+    """
+    Poll the status of a review by ID.  Used by the frontend to resume
+    after a network disconnect (e.g. phone screen lock).
+
+    Returns:
+      {status: "running", accumulated_text: "..."}   — review still in progress
+      {status: "done", review_id, manuscript_title, decision, word_count,
+       weighted_score, stage_scores, wrs_parts, gcs_url?}  — complete
+      {status: "not_found"}  — unknown ID (expired or never started)
+    """
+    entry = _review_store.get(review_id)
+    if not entry:
+        return jsonify({"status": "not_found"}), 404
+
+    status = entry.get("status", "running")
+
+    if status == "done":
+        payload = {
+            "status": "done",
+            "review_id": review_id,
+            "manuscript_title": entry.get("manuscript_title", ""),
+            "decision": entry.get("decision", ""),
+            "word_count": entry.get("word_count", 0),
+            "weighted_score": entry.get("weighted_score"),
+            "stage_scores": entry.get("stage_scores", {}),
+            "wrs_parts": entry.get("wrs_parts", ""),
+        }
+        if entry.get("gcs_url"):
+            payload["gcs_url"] = entry["gcs_url"]
+        return jsonify(payload), 200
+
+    # Still running — return accumulated text so far
+    return jsonify({
+        "status": "running",
+        "accumulated_text": entry.get("accumulated_text", ""),
+    }), 200
 
 
 # ---------------------------------------------------------------------------
@@ -368,7 +444,282 @@ def payment_verify():
 
 
 # ---------------------------------------------------------------------------
-# Guidelines admin endpoints (no auth needed for read; add auth for write)
+# Test payment page (sandbox only — for manual QA)
+# ---------------------------------------------------------------------------
+
+@app.route("/payment/test", methods=["GET"])
+def payment_test_page():
+    """
+    Sandbox test page for manually verifying the Razorpay payment flow.
+    Creates a dummy review entry so a real payment order can be created.
+    Shows Razorpay test card numbers for convenience.
+    """
+    test_review_id = "test-" + str(uuid.uuid4())[:8]
+    _review_store[test_review_id] = {
+        "status": "done",
+        "manuscript_title": "Test Manuscript — Payment QA",
+        "decision": "Major Revision Required",
+        "word_count": 3500,
+        "review_text": "This is a test review entry for payment QA.",
+        "filename": "test_manuscript.pdf",
+    }
+
+    key_id   = RAZORPAY_KEY_ID if PAYMENT_ENABLED else ""
+    amount   = PAYMENT_AMOUNT_PAISE
+    currency = PAYMENT_CURRENCY
+    enabled  = PAYMENT_ENABLED
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Payment Gateway Test — Sandbox</title>
+<style>
+  body {{
+    font-family: system-ui, sans-serif;
+    background: #0f1117; color: #e8eaf0;
+    max-width: 640px; margin: 40px auto; padding: 24px;
+  }}
+  h1 {{ color: #00c9b1; }}
+  .card {{
+    background: #181c27; border: 1px solid #2a3050;
+    border-radius: 12px; padding: 24px; margin: 16px 0;
+  }}
+  table {{ width: 100%; border-collapse: collapse; }}
+  td {{ padding: 8px 12px; border: 1px solid #2a3050; font-size: 14px; }}
+  td:first-child {{ color: #7a8aa8; width: 40%; }}
+  .btn {{
+    display: block; width: 100%;
+    background: #00c9b1; color: #0f1117;
+    border: none; border-radius: 8px;
+    padding: 14px; font-size: 16px; font-weight: 700;
+    cursor: pointer; margin-top: 16px;
+  }}
+  .btn:disabled {{ background: #2a3050; color: #7a8aa8; cursor: not-allowed; }}
+  .warn {{ background: #2a1010; border-color: #ff5c6a; color: #ff5c6a; border-radius: 8px; padding: 12px; }}
+  .ok  {{ background: #0a2010; border-color: #3dd68c; color: #3dd68c; border-radius: 8px; padding: 12px; }}
+  pre  {{ background: #242840; padding: 12px; border-radius: 8px; font-size: 12px; overflow: auto; }}
+  .tag {{ background: #00c9b1; color: #0f1117; border-radius: 4px; padding: 2px 8px; font-weight: 700; font-size: 12px; }}
+</style>
+</head>
+<body>
+<h1>&#128296; Payment Gateway Test</h1>
+<p style="color:#7a8aa8">Sandbox test page — no real money is charged.</p>
+
+{"<div class='warn'>&#9888; Payment gateway is <b>NOT configured</b>. Set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET environment variables.</div>" if not enabled else ""}
+{"<div class='ok'>&#10003; Payment gateway is <b>active</b>. Using test keys.</div>" if enabled else ""}
+
+<div class="card">
+  <h3 style="margin-top:0; color:#00c9b1">Test Details</h3>
+  <table>
+    <tr><td>Review ID</td><td><code>{test_review_id}</code></td></tr>
+    <tr><td>Amount</td><td><b>&#8377;100</b> (10,000 paise)</td></tr>
+    <tr><td>Currency</td><td>{currency}</td></tr>
+    <tr><td>Key ID</td><td><code>{key_id or "not set"}</code></td></tr>
+  </table>
+  <button class="btn" id="payBtn" {'disabled' if not enabled else ''} onclick="startTestPayment()">
+    &#128179; Pay &#8377;100 — Test Payment
+  </button>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0; color:#00c9b1">Razorpay Test Cards</h3>
+  <table>
+    <tr><td>Card Number</td><td><code>4111 1111 1111 1111</code> <span class="tag">Visa</span></td></tr>
+    <tr><td>Expiry</td><td>Any future date (e.g. 12/26)</td></tr>
+    <tr><td>CVV</td><td>Any 3 digits (e.g. 123)</td></tr>
+    <tr><td>OTP</td><td><code>1234</code></td></tr>
+  </table>
+  <br>
+  <table>
+    <tr><td>UPI</td><td><code>success@razorpay</code> (always succeeds)</td></tr>
+    <tr><td>UPI Failure</td><td><code>failure@razorpay</code> (always fails)</td></tr>
+  </table>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0; color:#00c9b1">Payment Flow</h3>
+  <ol style="color:#7a8aa8; line-height:1.8">
+    <li>Click the button above &#8594; creates a Razorpay order via <code>POST /payment/create-order</code></li>
+    <li>Razorpay Checkout popup opens &#8594; enter test card / UPI details</li>
+    <li>On success &#8594; calls <code>POST /payment/verify</code> with HMAC signature</li>
+    <li>On verification &#8594; shows success message below</li>
+  </ol>
+</div>
+
+<div id="result" style="display:none" class="card"></div>
+
+<script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+<script>
+async function startTestPayment() {{
+  document.getElementById('payBtn').disabled = true;
+  document.getElementById('payBtn').textContent = 'Creating order...';
+  const result = document.getElementById('result');
+  result.style.display = 'none';
+
+  try {{
+    const orderResp = await fetch('/payment/create-order', {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify({{review_id: '{test_review_id}'}})
+    }});
+    const order = await orderResp.json();
+    if (!orderResp.ok) throw new Error(order.error || 'Order creation failed');
+
+    const options = {{
+      key: order.key_id,
+      amount: order.amount,
+      currency: order.currency,
+      name: 'MedScript Reviewer',
+      description: 'Test Payment — Peer Review PDF Download',
+      order_id: order.order_id,
+      handler: async function(response) {{
+        const verifyResp = await fetch('/payment/verify', {{
+          method: 'POST',
+          headers: {{'Content-Type': 'application/json'}},
+          body: JSON.stringify({{
+            razorpay_order_id:  response.razorpay_order_id,
+            razorpay_payment_id: response.razorpay_payment_id,
+            razorpay_signature: response.razorpay_signature,
+            review_id: '{test_review_id}'
+          }})
+        }});
+        const vData = await verifyResp.json();
+        result.style.display = 'block';
+        if (vData.verified) {{
+          result.className = 'card ok';
+          result.innerHTML = '<h3 style="margin-top:0">&#10003; Payment Verified Successfully!</h3>' +
+            '<pre>' + JSON.stringify({{payment_id: response.razorpay_payment_id, order_id: response.razorpay_order_id}}, null, 2) + '</pre>';
+        }} else {{
+          result.className = 'card warn';
+          result.innerHTML = '<b>Verification failed:</b> ' + (vData.error || 'Unknown error');
+        }}
+      }},
+      modal: {{ ondismiss: function() {{
+        document.getElementById('payBtn').disabled = false;
+        document.getElementById('payBtn').textContent = 'Pay &#8377;100 — Test Payment';
+      }} }},
+      theme: {{ color: '#00c9b1' }}
+    }};
+    new Razorpay(options).open();
+  }} catch(e) {{
+    result.style.display = 'block';
+    result.className = 'card warn';
+    result.innerHTML = '<b>Error:</b> ' + e.message;
+    document.getElementById('payBtn').disabled = false;
+    document.getElementById('payBtn').textContent = 'Pay &#8377;100 — Test Payment';
+  }}
+}}
+</script>
+</body>
+</html>"""
+    return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+
+
+# ---------------------------------------------------------------------------
+# Admin UI + authenticated admin API
+# ---------------------------------------------------------------------------
+
+@app.route("/admin", methods=["GET"])
+def admin_page():
+    html_path = os.path.join(os.path.dirname(__file__), "admin.html")
+    with open(html_path, "r", encoding="utf-8") as f:
+        return f.read(), 200, {"Content-Type": "text/html; charset=utf-8"}
+
+
+@app.route("/admin/check-auth", methods=["GET"])
+def admin_check_auth():
+    """Return 200 if admin is logged in, 401 otherwise."""
+    if session.get("admin_authenticated"):
+        return jsonify({"authenticated": True, "username": session.get("admin_username")}), 200
+    return jsonify({"authenticated": False}), 401
+
+
+@app.route("/admin/login", methods=["POST"])
+def admin_login():
+    """
+    Authenticate an admin user.
+    JSON body: {"username": "...", "password": "..."}
+    """
+    data = request.get_json(silent=True) or {}
+    username = data.get("username", "").strip()
+    password = data.get("password", "")
+
+    cfg = _load_admin_config()
+    if username == cfg.get("username") and password == cfg.get("password"):
+        session["admin_authenticated"] = True
+        session["admin_username"] = username
+        logger.info(f"Admin login: {username}")
+        return jsonify({"authenticated": True, "username": username}), 200
+
+    logger.warning(f"Failed admin login attempt for username '{username}'")
+    return jsonify({"error": "Invalid username or password."}), 401
+
+
+@app.route("/admin/logout", methods=["POST"])
+def admin_logout():
+    session.clear()
+    return jsonify({"logged_out": True}), 200
+
+
+@app.route("/admin/guidelines/raw", methods=["GET"])
+@_admin_required
+def admin_guidelines_raw():
+    """Return the raw YAML text of review_guidelines.yaml."""
+    try:
+        return jsonify({"yaml": get_guidelines_raw()}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/admin/guidelines/save", methods=["POST"])
+@_admin_required
+def admin_guidelines_save():
+    """
+    Validate and save a new guidelines YAML.
+    JSON body: {"yaml": "...raw yaml text..."}
+    """
+    data = request.get_json(silent=True) or {}
+    raw_yaml = data.get("yaml", "")
+    if not raw_yaml.strip():
+        return jsonify({"saved": False, "errors": ["Empty YAML provided."]}), 400
+
+    result = save_guidelines_yaml(raw_yaml)
+    status = 200 if result.get("saved") else 422
+    logger.info(f"Admin guidelines save: saved={result.get('saved')}")
+    return jsonify(result), status
+
+
+@app.route("/admin/credentials", methods=["POST"])
+@_admin_required
+def admin_change_credentials():
+    """
+    Change admin username and/or password.
+    JSON body: {"username": "...", "password": "...", "confirm_password": "..."}
+    """
+    data = request.get_json(silent=True) or {}
+    new_username = data.get("username", "").strip()
+    new_password = data.get("password", "")
+    confirm      = data.get("confirm_password", "")
+
+    if not new_username:
+        return jsonify({"error": "Username cannot be empty."}), 400
+    if not new_password:
+        return jsonify({"error": "Password cannot be empty."}), 400
+    if new_password != confirm:
+        return jsonify({"error": "Passwords do not match."}), 400
+    if len(new_password) < 6:
+        return jsonify({"error": "Password must be at least 6 characters."}), 400
+
+    _save_admin_config({"username": new_username, "password": new_password})
+    session["admin_username"] = new_username
+    logger.info(f"Admin credentials updated to username '{new_username}'")
+    return jsonify({"updated": True, "username": new_username}), 200
+
+
+# ---------------------------------------------------------------------------
+# Guidelines public endpoints (read-only, no auth needed)
 # ---------------------------------------------------------------------------
 
 @app.route("/guidelines/metadata", methods=["GET"])
