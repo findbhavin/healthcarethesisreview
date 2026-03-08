@@ -257,3 +257,31 @@ def validate_guidelines() -> dict:
     if errors:
         return {"valid": False, "errors": errors}
     return {"valid": True, "version": data.get("metadata", {}).get("version", "unknown")}
+
+
+def get_guidelines_raw() -> str:
+    """Return the raw YAML text of the active guidelines (GCS or disk)."""
+    if os.environ.get("GCS_BUCKET"):
+        try:
+            from gcs_uploader import get_current_rule_from_gcs
+            raw = get_current_rule_from_gcs()
+            if raw:
+                return raw
+        except Exception as exc:
+            logger.warning(f"GCS raw fetch failed — falling back to disk: {exc}")
+    with open(GUIDELINES_PATH, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def save_guidelines_yaml(raw_yaml: str) -> dict:
+    """Validate and save new guidelines YAML to disk."""
+    try:
+        _parse_yaml_str(raw_yaml)
+    except Exception as e:
+        return {"saved": False, "errors": [str(e)]}
+    try:
+        with open(GUIDELINES_PATH, "w", encoding="utf-8") as f:
+            f.write(raw_yaml)
+        return {"saved": True}
+    except Exception as e:
+        return {"saved": False, "errors": [str(e)]}
