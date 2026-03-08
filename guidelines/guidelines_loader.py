@@ -218,3 +218,49 @@ def validate_guidelines() -> dict:
     if errors:
         return {"valid": False, "errors": errors}
     return {"valid": True, "version": data.get("metadata", {}).get("version", "unknown")}
+
+
+def get_guidelines_raw() -> str:
+    """Return the raw YAML text of the guidelines file."""
+    with open(GUIDELINES_PATH, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def save_guidelines_yaml(raw_yaml: str) -> dict:
+    """
+    Validate and atomically save raw YAML text to review_guidelines.yaml.
+    Returns {"saved": True} or {"saved": False, "errors": [...]}
+    """
+    import tempfile
+    import shutil
+
+    # Parse YAML syntax
+    try:
+        data = yaml.safe_load(raw_yaml)
+    except yaml.YAMLError as e:
+        return {"saved": False, "errors": [f"YAML syntax error: {e}"]}
+
+    if not data or not isinstance(data, dict):
+        return {"saved": False, "errors": ["YAML must be a mapping at the top level."]}
+
+    # Check required keys
+    required = ["role", "stages", "output_format"]
+    missing = [k for k in required if k not in data]
+    if missing:
+        return {"saved": False, "errors": [f"Missing required keys: {missing}"]}
+
+    if "stages" not in data or not data["stages"]:
+        return {"saved": False, "errors": ["'stages' must be a non-empty mapping."]}
+
+    # Atomic write: temp file in same dir then rename
+    try:
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            dir=os.path.dirname(GUIDELINES_PATH), suffix=".yaml.tmp"
+        )
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
+            fh.write(raw_yaml)
+        shutil.move(tmp_path, GUIDELINES_PATH)
+        logger.info("Guidelines YAML saved successfully.")
+        return {"saved": True}
+    except Exception as e:
+        return {"saved": False, "errors": [f"Write error: {e}"]}

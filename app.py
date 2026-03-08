@@ -34,8 +34,10 @@ import logging
 import io
 import hmac
 import hashlib
+import secrets
+from functools import wraps
 
-from flask import Flask, request, jsonify, send_file, Response, stream_with_context
+from flask import Flask, request, jsonify, send_file, Response, stream_with_context, session
 
 from review_agent import run_review, extract_text, stream_review
 from report_generator import generate_report
@@ -46,6 +48,8 @@ from guidelines.guidelines_loader import (
     get_journal_list,
     get_full_guidelines,
     validate_guidelines,
+    get_guidelines_raw,
+    save_guidelines_yaml,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -53,6 +57,35 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB
+# Secret key: override with FLASK_SECRET_KEY env var in production
+app.secret_key = os.environ.get("FLASK_SECRET_KEY") or secrets.token_hex(32)
+
+# ---------------------------------------------------------------------------
+# Admin credentials (stored in admin_config.json, editable at runtime)
+# ---------------------------------------------------------------------------
+_ADMIN_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "admin_config.json")
+
+
+def _load_admin_config() -> dict:
+    if os.path.exists(_ADMIN_CONFIG_PATH):
+        with open(_ADMIN_CONFIG_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {"username": "admin", "password": "prakash"}
+
+
+def _save_admin_config(config: dict) -> None:
+    with open(_ADMIN_CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2)
+
+
+def _admin_required(f):
+    """Decorator: require admin session on API routes."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not session.get("admin_authenticated"):
+            return jsonify({"error": "Authentication required.", "auth": False}), 401
+        return f(*args, **kwargs)
+    return decorated
 
 ALLOWED_EXTENSIONS = {"pdf", "docx", "txt"}
 
@@ -579,7 +612,108 @@ async function startTestPayment() {{
 
 
 # ---------------------------------------------------------------------------
-# Guidelines admin endpoints (no auth needed for read; add auth for write)
+# Admin UI + authenticated admin API
+# ---------------------------------------------------------------------------
+
+@app.route("/admin", methods=["GET"])
+def admin_page():
+    html_path = os.path.join(os.path.dirname(__file__), "admin.html")
+    with open(html_path, "r", encoding="utf-8") as f:
+        return f.read(), 200, {"Content-Type": "text/html; charset=utf-8"}
+
+
+@app.route("/admin/check-auth", methods=["GET"])
+def admin_check_auth():
+    """Return 200 if admin is logged in, 401 otherwise."""
+    if session.get("admin_authenticated"):
+        return jsonify({"authenticated": True, "username": session.get("admin_username")}), 200
+    return jsonify({"authenticated": False}), 401
+
+
+@app.route("/admin/login", methods=["POST"])
+def admin_login():
+    """
+    Authenticate an admin user.
+    JSON body: {"username": "...", "password": "..."}
+    """
+    data = request.get_json(silent=True) or {}
+    username = data.get("username", "").strip()
+    password = data.get("password", "")
+
+    cfg = _load_admin_config()
+    if username == cfg.get("username") and password == cfg.get("password"):
+        session["admin_authenticated"] = True
+        session["admin_username"] = username
+        logger.info(f"Admin login: {username}")
+        return jsonify({"authenticated": True, "username": username}), 200
+
+    logger.warning(f"Failed admin login attempt for username '{username}'")
+    return jsonify({"error": "Invalid username or password."}), 401
+
+
+@app.route("/admin/logout", methods=["POST"])
+def admin_logout():
+    session.clear()
+    return jsonify({"logged_out": True}), 200
+
+
+@app.route("/admin/guidelines/raw", methods=["GET"])
+@_admin_required
+def admin_guidelines_raw():
+    """Return the raw YAML text of review_guidelines.yaml."""
+    try:
+        return jsonify({"yaml": get_guidelines_raw()}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/admin/guidelines/save", methods=["POST"])
+@_admin_required
+def admin_guidelines_save():
+    """
+    Validate and save a new guidelines YAML.
+    JSON body: {"yaml": "...raw yaml text..."}
+    """
+    data = request.get_json(silent=True) or {}
+    raw_yaml = data.get("yaml", "")
+    if not raw_yaml.strip():
+        return jsonify({"saved": False, "errors": ["Empty YAML provided."]}), 400
+
+    result = save_guidelines_yaml(raw_yaml)
+    status = 200 if result.get("saved") else 422
+    logger.info(f"Admin guidelines save: saved={result.get('saved')}")
+    return jsonify(result), status
+
+
+@app.route("/admin/credentials", methods=["POST"])
+@_admin_required
+def admin_change_credentials():
+    """
+    Change admin username and/or password.
+    JSON body: {"username": "...", "password": "...", "confirm_password": "..."}
+    """
+    data = request.get_json(silent=True) or {}
+    new_username = data.get("username", "").strip()
+    new_password = data.get("password", "")
+    confirm      = data.get("confirm_password", "")
+
+    if not new_username:
+        return jsonify({"error": "Username cannot be empty."}), 400
+    if not new_password:
+        return jsonify({"error": "Password cannot be empty."}), 400
+    if new_password != confirm:
+        return jsonify({"error": "Passwords do not match."}), 400
+    if len(new_password) < 6:
+        return jsonify({"error": "Password must be at least 6 characters."}), 400
+
+    _save_admin_config({"username": new_username, "password": new_password})
+    session["admin_username"] = new_username
+    logger.info(f"Admin credentials updated to username '{new_username}'")
+    return jsonify({"updated": True, "username": new_username}), 200
+
+
+# ---------------------------------------------------------------------------
+# Guidelines public endpoints (read-only, no auth needed)
 # ---------------------------------------------------------------------------
 
 @app.route("/guidelines/metadata", methods=["GET"])

@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Admin — Review Guidelines Editor</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: system-ui, -apple-system, sans-serif;
+    background: #0f1117; color: #e8eaf0;
+    min-height: 100vh;
+  }
+
+  /* ── Login page ─────────────────────────────────────────── */
+  #loginScreen {
+    display: flex; align-items: center; justify-content: center;
+    min-height: 100vh;
+  }
+  .login-card {
+    background: #181c27; border: 1px solid #2a3050;
+    border-radius: 16px; padding: 40px 36px;
+    width: 100%; max-width: 400px;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.5);
+  }
+  .login-card h1 {
+    color: #1A5C96; font-size: 22px; margin-bottom: 6px;
+  }
+  .login-card p { color: #7a8aa8; font-size: 13px; margin-bottom: 28px; }
+  label { display: block; font-size: 12px; color: #7a8aa8; margin-bottom: 5px; }
+  input[type=text], input[type=password], textarea {
+    width: 100%; background: #0f1117; border: 1px solid #2a3050;
+    border-radius: 8px; color: #e8eaf0; padding: 10px 14px; font-size: 14px;
+    outline: none; transition: border-color .2s;
+  }
+  input[type=text]:focus, input[type=password]:focus, textarea:focus {
+    border-color: #1A5C96;
+  }
+  .field { margin-bottom: 18px; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 10px 20px; border-radius: 8px; border: none;
+    font-size: 14px; font-weight: 600; cursor: pointer;
+    transition: opacity .2s;
+  }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn-primary { background: #1A5C96; color: #fff; }
+  .btn-primary:not(:disabled):hover { opacity: .85; }
+  .btn-success { background: #006600; color: #fff; }
+  .btn-success:not(:disabled):hover { opacity: .85; }
+  .btn-warn   { background: #B86E00; color: #fff; }
+  .btn-warn:not(:disabled):hover { opacity: .85; }
+  .btn-danger { background: #CC0000; color: #fff; }
+  .btn-danger:not(:disabled):hover { opacity: .85; }
+  .btn-ghost  { background: transparent; color: #7a8aa8; border: 1px solid #2a3050; }
+  .btn-ghost:not(:disabled):hover { border-color: #1A5C96; color: #e8eaf0; }
+  .btn-full { width: 100%; justify-content: center; }
+
+  /* ── Main admin layout ─────────────────────────────────── */
+  #adminScreen { display: none; flex-direction: column; min-height: 100vh; }
+
+  .topbar {
+    background: #181c27; border-bottom: 1px solid #2a3050;
+    padding: 14px 32px; display: flex; align-items: center; gap: 16px;
+  }
+  .topbar h1 { font-size: 18px; color: #1A5C96; flex: 1; }
+  .topbar span { font-size: 13px; color: #7a8aa8; }
+
+  .tabs {
+    display: flex; gap: 0; border-bottom: 1px solid #2a3050;
+    background: #181c27; padding: 0 32px;
+  }
+  .tab-btn {
+    padding: 12px 22px; font-size: 14px; font-weight: 600;
+    color: #7a8aa8; cursor: pointer; border-bottom: 2px solid transparent;
+    background: none; border-top: none; border-left: none; border-right: none;
+    transition: color .2s, border-color .2s;
+  }
+  .tab-btn.active { color: #1A5C96; border-bottom-color: #1A5C96; }
+
+  .tab-panel { display: none; padding: 28px 32px; flex: 1; }
+  .tab-panel.active { display: block; }
+
+  /* ── YAML Editor ───────────────────────────────────────── */
+  .editor-toolbar {
+    display: flex; gap: 10px; align-items: center;
+    margin-bottom: 14px; flex-wrap: wrap;
+  }
+  .editor-toolbar .spacer { flex: 1; }
+  textarea#yamlEditor {
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 13px; line-height: 1.55;
+    min-height: 520px; resize: vertical;
+    padding: 16px; background: #0c0e16;
+    border: 1px solid #2a3050; border-radius: 8px;
+    tab-size: 2; white-space: pre;
+  }
+  .status-bar {
+    margin-top: 12px; padding: 10px 14px; border-radius: 8px;
+    font-size: 13px; display: none;
+  }
+  .status-bar.ok  { background: #0a2010; border: 1px solid #3dd68c; color: #3dd68c; display: block; }
+  .status-bar.err { background: #2a1010; border: 1px solid #ff5c6a; color: #ff5c6a; display: block; }
+  .status-bar.info { background: #0a1c30; border: 1px solid #1A5C96; color: #90b8e0; display: block; }
+
+  /* ── Changelog ────────────────────────────────────────── */
+  .changelog-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .changelog-table th {
+    background: #1A5C96; color: #fff; text-align: left;
+    padding: 10px 12px;
+  }
+  .changelog-table td {
+    padding: 10px 12px; border-bottom: 1px solid #2a3050;
+  }
+  .changelog-table tr:nth-child(even) td { background: #181c27; }
+
+  /* ── Settings ─────────────────────────────────────────── */
+  .settings-section {
+    background: #181c27; border: 1px solid #2a3050;
+    border-radius: 12px; padding: 28px; max-width: 480px;
+    margin-bottom: 24px;
+  }
+  .settings-section h3 { font-size: 15px; color: #e8eaf0; margin-bottom: 16px; }
+
+  /* ── Toast ────────────────────────────────────────────── */
+  #toast {
+    position: fixed; bottom: 24px; right: 24px;
+    background: #1A5C96; color: #fff;
+    padding: 12px 20px; border-radius: 10px;
+    font-size: 14px; opacity: 0;
+    transition: opacity .35s;
+    pointer-events: none; z-index: 999;
+  }
+  #toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<!-- ══════════════════════════════════════════════════════════════ -->
+<!--  LOGIN SCREEN                                                  -->
+<!-- ══════════════════════════════════════════════════════════════ -->
+<div id="loginScreen">
+  <div class="login-card">
+    <h1>🔐 Admin Login</h1>
+    <p>Sign in to manage review guidelines and settings.</p>
+
+    <div class="field">
+      <label for="loginUser">Username</label>
+      <input type="text" id="loginUser" autocomplete="username" placeholder="admin">
+    </div>
+    <div class="field">
+      <label for="loginPass">Password</label>
+      <input type="password" id="loginPass" autocomplete="current-password" placeholder="••••••••">
+    </div>
+    <div id="loginError" class="status-bar err" style="display:none; margin-bottom:14px;"></div>
+    <button class="btn btn-primary btn-full" id="loginBtn" onclick="doLogin()">Sign In</button>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════ -->
+<!--  ADMIN SCREEN                                                  -->
+<!-- ══════════════════════════════════════════════════════════════ -->
+<div id="adminScreen">
+
+  <!-- Top bar -->
+  <div class="topbar">
+    <h1>Review Guidelines Admin</h1>
+    <span id="topbarUser"></span>
+    <button class="btn btn-ghost" onclick="doLogout()">Sign Out</button>
+  </div>
+
+  <!-- Tabs -->
+  <div class="tabs">
+    <button class="tab-btn active" onclick="showTab('editor', this)">📝 Guidelines Editor</button>
+    <button class="tab-btn" onclick="showTab('changelog', this)">📋 Changelog</button>
+    <button class="tab-btn" onclick="showTab('settings', this)">⚙️ Settings</button>
+  </div>
+
+  <!-- ── Guidelines Editor Tab ──────────────────────────────── -->
+  <div class="tab-panel active" id="tab-editor">
+    <div class="editor-toolbar">
+      <button class="btn btn-ghost" onclick="loadYaml()">↺ Reload from Disk</button>
+      <button class="btn btn-warn" onclick="validateYaml()">✓ Validate</button>
+      <div class="spacer"></div>
+      <button class="btn btn-success" onclick="saveYaml()">💾 Save &amp; Reload</button>
+    </div>
+    <textarea id="yamlEditor" spellcheck="false" placeholder="Loading…"></textarea>
+    <div id="editorStatus" class="status-bar"></div>
+  </div>
+
+  <!-- ── Changelog Tab ──────────────────────────────────────── -->
+  <div class="tab-panel" id="tab-changelog">
+    <h2 style="font-size:16px; color:#1A5C96; margin-bottom:16px;">Guidelines Changelog</h2>
+    <table class="changelog-table" id="changelogTable">
+      <thead>
+        <tr>
+          <th>Version</th><th>Date</th><th>Author</th><th>Changes</th>
+        </tr>
+      </thead>
+      <tbody id="changelogBody">
+        <tr><td colspan="4" style="color:#7a8aa8; padding:20px;">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ── Settings Tab ───────────────────────────────────────── -->
+  <div class="tab-panel" id="tab-settings">
+
+    <div class="settings-section">
+      <h3>Change Admin Credentials</h3>
+      <div class="field">
+        <label for="newUser">New Username</label>
+        <input type="text" id="newUser" autocomplete="off" placeholder="admin">
+      </div>
+      <div class="field">
+        <label for="newPass">New Password (min 6 characters)</label>
+        <input type="password" id="newPass" autocomplete="new-password" placeholder="••••••••">
+      </div>
+      <div class="field">
+        <label for="confPass">Confirm Password</label>
+        <input type="password" id="confPass" autocomplete="new-password" placeholder="••••••••">
+      </div>
+      <div id="credStatus" class="status-bar" style="margin-bottom:14px;"></div>
+      <button class="btn btn-primary" onclick="changeCredentials()">Update Credentials</button>
+    </div>
+
+    <div class="settings-section">
+      <h3>Hot-Reload Guidelines</h3>
+      <p style="color:#7a8aa8; font-size:13px; margin-bottom:16px;">
+        Force the application to re-read the YAML from disk without restarting.
+        This happens automatically on Save &amp; Reload above.
+      </p>
+      <button class="btn btn-ghost" onclick="reloadGuidelines()">↺ Hot-Reload Now</button>
+      <div id="reloadStatus" class="status-bar" style="margin-top:12px;"></div>
+    </div>
+
+  </div>
+
+</div>
+
+<!-- Toast notification -->
+<div id="toast"></div>
+
+<script>
+// ── Utilities ───────────────────────────────────────────────────
+function toast(msg, ms = 3000) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), ms);
+}
+
+function setStatus(id, msg, type) {
+  const el = document.getElementById(id);
+  el.textContent = msg;
+  el.className = 'status-bar ' + type;
+}
+
+function showTab(name, btn) {
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  btn.classList.add('active');
+  if (name === 'changelog') loadChangelog();
+}
+
+// ── Auth ────────────────────────────────────────────────────────
+async function doLogin() {
+  const btn  = document.getElementById('loginBtn');
+  const user = document.getElementById('loginUser').value.trim();
+  const pass = document.getElementById('loginPass').value;
+  const err  = document.getElementById('loginError');
+
+  err.style.display = 'none';
+  btn.disabled = true;
+  btn.textContent = 'Signing in…';
+
+  try {
+    const r = await fetch('/admin/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({username: user, password: pass}),
+    });
+    const d = await r.json();
+    if (r.ok && d.authenticated) {
+      showAdmin(d.username);
+    } else {
+      err.textContent = d.error || 'Login failed.';
+      err.style.display = 'block';
+    }
+  } catch(e) {
+    err.textContent = 'Network error. Please try again.';
+    err.style.display = 'block';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Sign In';
+  }
+}
+
+async function doLogout() {
+  await fetch('/admin/logout', {method: 'POST'});
+  document.getElementById('adminScreen').style.display = 'none';
+  document.getElementById('loginScreen').style.display = 'flex';
+  document.getElementById('loginPass').value = '';
+}
+
+function showAdmin(username) {
+  document.getElementById('loginScreen').style.display = 'none';
+  document.getElementById('adminScreen').style.display = 'flex';
+  document.getElementById('topbarUser').textContent = '👤 ' + username;
+  loadYaml();
+}
+
+// Auto-check auth on page load
+(async function() {
+  try {
+    const r = await fetch('/admin/check-auth');
+    if (r.ok) {
+      const d = await r.json();
+      if (d.authenticated) showAdmin(d.username);
+    }
+  } catch(e) {}
+})();
+
+// Allow Enter key on login form
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && document.getElementById('loginScreen').style.display !== 'none') {
+    doLogin();
+  }
+});
+
+// ── Guidelines Editor ───────────────────────────────────────────
+async function loadYaml() {
+  const ta = document.getElementById('yamlEditor');
+  const st = document.getElementById('editorStatus');
+  ta.value = 'Loading…';
+  st.className = 'status-bar';
+
+  try {
+    const r = await fetch('/admin/guidelines/raw');
+    if (r.status === 401) { doLogout(); return; }
+    const d = await r.json();
+    ta.value = d.yaml || '';
+    setStatus('editorStatus', '✓ Loaded from disk.', 'info');
+  } catch(e) {
+    setStatus('editorStatus', 'Error loading YAML: ' + e.message, 'err');
+  }
+}
+
+async function validateYaml() {
+  const raw = document.getElementById('yamlEditor').value;
+  setStatus('editorStatus', 'Validating…', 'info');
+
+  try {
+    const r = await fetch('/guidelines/validate', {method: 'POST'});
+    const d = await r.json();
+    if (d.valid) {
+      setStatus('editorStatus', `✓ Valid — version ${d.version || 'unknown'}`, 'ok');
+    } else {
+      setStatus('editorStatus', '✗ Errors:\n' + (d.errors || []).join('\n'), 'err');
+    }
+  } catch(e) {
+    setStatus('editorStatus', 'Validation request failed: ' + e.message, 'err');
+  }
+}
+
+async function saveYaml() {
+  const raw = document.getElementById('yamlEditor').value.trim();
+  if (!raw) { setStatus('editorStatus', 'Cannot save empty content.', 'err'); return; }
+
+  setStatus('editorStatus', 'Saving…', 'info');
+
+  try {
+    const r = await fetch('/admin/guidelines/save', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({yaml: raw}),
+    });
+    if (r.status === 401) { doLogout(); return; }
+    const d = await r.json();
+    if (d.saved) {
+      setStatus('editorStatus', '✓ Saved & reloaded successfully. New reviews will use the updated guidelines.', 'ok');
+      toast('Guidelines saved!');
+    } else {
+      setStatus('editorStatus', '✗ Save failed:\n' + (d.errors || []).join('\n'), 'err');
+    }
+  } catch(e) {
+    setStatus('editorStatus', 'Save request failed: ' + e.message, 'err');
+  }
+}
+
+// ── Changelog ───────────────────────────────────────────────────
+async function loadChangelog() {
+  const tbody = document.getElementById('changelogBody');
+  tbody.innerHTML = '<tr><td colspan="4" style="color:#7a8aa8;padding:20px;">Loading…</td></tr>';
+
+  try {
+    const r = await fetch('/guidelines/changelog');
+    const d = await r.json();
+    const entries = (d.changelog || []).slice().reverse(); // newest first
+    if (!entries.length) {
+      tbody.innerHTML = '<tr><td colspan="4" style="color:#7a8aa8;padding:20px;">No changelog entries.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = entries.map(e => `
+      <tr>
+        <td><strong>${esc(e.version || '—')}</strong></td>
+        <td>${esc(e.date || '—')}</td>
+        <td>${esc(e.author || '—')}</td>
+        <td>${esc(e.changes || '—')}</td>
+      </tr>
+    `).join('');
+  } catch(e) {
+    tbody.innerHTML = `<tr><td colspan="4" style="color:#ff5c6a;padding:20px;">Error: ${e.message}</td></tr>`;
+  }
+}
+
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Settings ─────────────────────────────────────────────────────
+async function changeCredentials() {
+  const user  = document.getElementById('newUser').value.trim();
+  const pass  = document.getElementById('newPass').value;
+  const conf  = document.getElementById('confPass').value;
+
+  setStatus('credStatus', 'Updating…', 'info');
+
+  try {
+    const r = await fetch('/admin/credentials', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({username: user, password: pass, confirm_password: conf}),
+    });
+    if (r.status === 401) { doLogout(); return; }
+    const d = await r.json();
+    if (d.updated) {
+      setStatus('credStatus', `✓ Credentials updated. New username: ${d.username}`, 'ok');
+      document.getElementById('topbarUser').textContent = '👤 ' + d.username;
+      document.getElementById('newPass').value = '';
+      document.getElementById('confPass').value = '';
+      toast('Credentials updated!');
+    } else {
+      setStatus('credStatus', '✗ ' + (d.error || 'Update failed.'), 'err');
+    }
+  } catch(e) {
+    setStatus('credStatus', 'Request failed: ' + e.message, 'err');
+  }
+}
+
+async function reloadGuidelines() {
+  setStatus('reloadStatus', 'Reloading…', 'info');
+  try {
+    const r = await fetch('/admin/reload-guidelines', {method: 'POST'});
+    const d = await r.json();
+    if (d.reloaded) {
+      setStatus('reloadStatus', `✓ Reloaded (version ${d.version || 'unknown'}).`, 'ok');
+      toast('Guidelines reloaded!');
+    } else {
+      setStatus('reloadStatus', '✗ Reload failed: ' + (d.errors || []).join('; '), 'err');
+    }
+  } catch(e) {
+    setStatus('reloadStatus', 'Request failed: ' + e.message, 'err');
+  }
+}
+</script>
+</body>
+</html>

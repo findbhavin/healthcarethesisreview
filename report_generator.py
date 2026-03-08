@@ -671,6 +671,20 @@ def _priority_color(priority: str):
     return C_DARK
 
 
+# Maps manuscript sections → review stages (shown in Author Revision Report)
+_SECTION_TO_STAGE = {
+    "SECTION 1 — TITLE":                            "Stage 1 — Initial Editorial Screening",
+    "SECTION 2 — KEYWORDS":                         "Stage 1 — Initial Editorial Screening",
+    "SECTION 3 — ABSTRACT":                         "Stage 1 — Initial Editorial Screening",
+    "SECTION 4 — INTRODUCTION":                     "Stage 2 — Scope & Novelty",
+    "SECTION 5 — METHODS":                          "Stage 3 — Methodology Review",
+    "SECTION 6 — RESULTS":                          "Stage 4 — Results & Data Integrity",
+    "SECTION 7 — DISCUSSION AND CONCLUSIONS":       "Stage 5 — Discussion & Conclusions",
+    "SECTION 8 — REFERENCES":                       "Stage 6 — References",
+    "SECTION 9 — TABLES AND FIGURES":               "Stage 4 — Results & Data Integrity",
+    "SECTION 10 — GENERAL AND MANUSCRIPT-WIDE COMMENTS": "Stages 7 & 8 — Ethics & Overall Recommendation",
+}
+
 # Canonical section order matching the Author_Revision_Report_Form.docx
 _MANUSCRIPT_SECTIONS = [
     "SECTION 1 — TITLE",
@@ -917,8 +931,18 @@ def _build_author_revision_report(review_result: dict, story: list, styles,
     # ── Per manuscript section comment tables ──────────────────────────────
     col_w_table = [1*cm, 8.5*cm, 2*cm, 4*cm]  # No. | Comment | Priority | Author Response
 
+    stage_ref_style = ParagraphStyle(
+        "ARStageRef", parent=styles["Normal"],
+        fontSize=8, textColor=C_GREY, fontName="Helvetica-Oblique",
+        spaceBefore=0, spaceAfter=4,
+    )
+
     for section_label, sec_items in sections_map.items():
         story.append(Paragraph(f"<b>{_esc(section_label)}</b>", h3_style))
+        # Show which review stage this manuscript section maps to
+        stage_ref = _SECTION_TO_STAGE.get(section_label)
+        if stage_ref:
+            story.append(Paragraph(f"Relates to: {_esc(stage_ref)}", stage_ref_style))
 
         tbl_data = [[
             Paragraph("<b>No.</b>", cell_label),
@@ -978,6 +1002,169 @@ def _build_author_revision_report(review_result: dict, story: list, styles,
         ParagraphStyle("ARFooter2", parent=styles["Normal"],
                        fontSize=7.5, textColor=C_GREY,
                        fontName="Helvetica-Oblique", alignment=1),
+    ))
+
+
+def _build_concluding_remarks(review_result: dict, story: list, styles,
+                              h2_style, h3_style, body_style) -> None:
+    """
+    Append a 'Concluding Remarks' section to `story`.
+
+    Includes:
+      • Editorial decision (colour-coded)
+      • Summary narrative (from Stage 8)
+      • What the author must address (Key Required Revisions)
+      • What the author should consider (MINOR/SUGGESTION items summary)
+      • Note about resubmission being treated as a fresh review
+    """
+    from reportlab.platypus import PageBreak
+
+    review_text = review_result.get("review_text", "")
+    decision    = review_result.get("decision", "—")
+    dec_color   = _decision_color(decision)
+
+    # Parse Stage 8 for summary and key revisions
+    stages = _split_into_stages(review_text)
+    stage8_text = stages.get("STAGE 8", "")
+
+    summary_text = ""
+    key_revisions: list[str] = []
+    in_revisions = False
+
+    for line in stage8_text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.lower().startswith("summary:"):
+            summary_text = stripped.split(":", 1)[1].strip()
+        elif re.match(r"key required revisions", stripped, re.IGNORECASE):
+            in_revisions = True
+        elif in_revisions and re.match(r"\d+\.", stripped):
+            rev = re.sub(r"^\d+\.\s*", "", stripped)
+            if rev:
+                key_revisions.append(rev)
+        elif in_revisions and stripped.startswith("-"):
+            rev = stripped.lstrip("-").strip()
+            if rev:
+                key_revisions.append(rev)
+
+    # Styles
+    decision_box_style = ParagraphStyle(
+        "CRDecision", parent=styles["Normal"],
+        fontSize=13, fontName="Helvetica-Bold",
+        spaceBefore=8, spaceAfter=8,
+    )
+    summary_style = ParagraphStyle(
+        "CRSummary", parent=body_style,
+        fontSize=10, leading=16, spaceAfter=6,
+        fontName="Helvetica-Oblique",
+    )
+    bullet_style = ParagraphStyle(
+        "CRBullet", parent=body_style,
+        fontSize=9.5, leading=14, spaceAfter=4,
+        leftIndent=14, firstLineIndent=-10,
+    )
+    note_style = ParagraphStyle(
+        "CRNote", parent=body_style,
+        fontSize=9, textColor=C_GREY,
+        fontName="Helvetica-Oblique", spaceBefore=14, spaceAfter=4,
+        borderPad=8,
+    )
+    small_label = ParagraphStyle(
+        "CRSmallLbl", parent=styles["Normal"],
+        fontSize=10, fontName="Helvetica-Bold",
+        textColor=C_BLUE, spaceBefore=12, spaceAfter=4,
+    )
+
+    story.append(PageBreak())
+    story.append(Paragraph("Concluding Remarks", h2_style))
+    story.append(HRFlowable(width="100%", thickness=1.5, color=C_BLUE, spaceAfter=12))
+
+    # Decision badge
+    story.append(Paragraph(
+        f'Editorial Decision: <font color="{dec_color.hexval()}"><b>{_esc(decision)}</b></font>',
+        decision_box_style,
+    ))
+
+    # Summary
+    if summary_text:
+        story.append(Paragraph(f'<i>{_esc(summary_text)}</i>', summary_style))
+    story.append(Spacer(1, 8))
+
+    # What the author must address
+    if key_revisions:
+        story.append(Paragraph("What the Author Must Address", small_label))
+        story.append(HRFlowable(width="100%", thickness=0.5, color=C_BLUE_LIGHT, spaceAfter=6))
+        for idx, rev in enumerate(key_revisions, 1):
+            story.append(Paragraph(
+                f'<font color="{C_MAJOR.hexval()}"><b>{idx}.</b></font> {_esc(rev)}',
+                bullet_style,
+            ))
+        story.append(Spacer(1, 8))
+
+    # MAJOR items from all stages (if no key revisions were parsed)
+    if not key_revisions:
+        major_items = [
+            item for item in _extract_revision_items(review_text)
+            if item["priority"] == "MAJOR"
+        ]
+        if major_items:
+            story.append(Paragraph("What the Author Must Address", small_label))
+            story.append(HRFlowable(width="100%", thickness=0.5, color=C_BLUE_LIGHT, spaceAfter=6))
+            for idx, item in enumerate(major_items, 1):
+                story.append(Paragraph(
+                    f'<font color="{C_MAJOR.hexval()}"><b>{idx}.</b></font> '
+                    f'<b>[{_esc(item["section"].split(" — ")[-1])}]</b> {_esc(item["comment"])}',
+                    bullet_style,
+                ))
+            story.append(Spacer(1, 8))
+
+    # Optional improvements
+    minor_items = [
+        item for item in _extract_revision_items(review_text)
+        if item["priority"] in ("MINOR", "SUGGESTION")
+    ]
+    if minor_items:
+        story.append(Paragraph("What the Author Should Consider", small_label))
+        story.append(HRFlowable(width="100%", thickness=0.5, color=C_BLUE_LIGHT, spaceAfter=6))
+        for item in minor_items[:8]:  # cap at 8 to keep this concise
+            story.append(Paragraph(
+                f'<font color="{C_AMBER.hexval()}">&#x25B8;</font> {_esc(item["comment"])}',
+                bullet_style,
+            ))
+        if len(minor_items) > 8:
+            story.append(Paragraph(
+                f"<i>…and {len(minor_items) - 8} additional minor comment(s) — "
+                "see Author Revision Report above for full details.</i>",
+                ParagraphStyle("CRMore", parent=body_style, fontSize=8.5,
+                               textColor=C_GREY, fontName="Helvetica-Oblique"),
+            ))
+        story.append(Spacer(1, 8))
+
+    # Resubmission note
+    story.append(HRFlowable(width="100%", thickness=0.5, color=C_BLUE_LIGHT,
+                            spaceBefore=10, spaceAfter=10))
+    story.append(Paragraph(
+        "&#x1F4CC; <b>Note on Resubmission:</b>",
+        ParagraphStyle("NoteHdr", parent=styles["Normal"],
+                       fontSize=10, fontName="Helvetica-Bold",
+                       textColor=C_BLUE, spaceAfter=4),
+    ))
+    story.append(Paragraph(
+        "Authors are encouraged to address all comments and resubmit a revised manuscript. "
+        "The authors may optionally return for a new AI-assisted review after revisions are made; "
+        "however, any such resubmission will be treated as an entirely <b>fresh review</b> — "
+        "previous scores and comments will not carry over. This ensures an unbiased evaluation "
+        "of the revised work.",
+        note_style,
+    ))
+    story.append(Spacer(1, 6))
+    story.append(Paragraph(
+        "This report was generated by an AI-Assisted Editorial Review System and is intended "
+        "to support, not replace, human editorial judgment.",
+        ParagraphStyle("CRFooter", parent=styles["Normal"],
+                       fontSize=8, textColor=C_GREY,
+                       fontName="Helvetica-Oblique", alignment=1, spaceBefore=10),
     ))
 
 
@@ -1067,15 +1254,14 @@ def generate_report(review_result: dict) -> bytes:
     story.append(info_table)
     story.append(Spacer(1, 16))
 
-    # ── Weighted Review Score card ─────────────────────────────────────────
+    # ── SECTION 1: Overall Category-Wise Scoring ───────────────────────────
+    story.append(Paragraph("Section 1 — Overall Category-Wise Scoring", h2_style))
+    story.append(HRFlowable(width="100%", thickness=0.8, color=C_BLUE_LIGHT, spaceAfter=8))
     scorecard_items = _build_scorecard(review_result, styles)
     story.extend(scorecard_items)
 
-    # ── Section-by-section findings summary table ──────────────────────────
-    story.extend(_build_section_findings_table(review_result, styles))
-
-    # ── Stage sections ─────────────────────────────────────────────────────
-    story.append(Paragraph("Detailed Review Findings", h2_style))
+    # ── SECTION 2: Overall Review Narratives ───────────────────────────────
+    story.append(Paragraph("Section 2 — Overall Review Narratives", h2_style))
     story.append(HRFlowable(width="100%", thickness=0.8, color=C_BLUE_LIGHT, spaceAfter=8))
 
     stages = _split_into_stages(review_result.get("review_text",""))
@@ -1186,17 +1372,13 @@ def generate_report(review_result: dict) -> bytes:
     except Exception:
         story.append(Paragraph("Guidelines metadata could not be loaded.", body_style))
 
-    # ── Author Revision Report (structured action table) ───────────────────
+    # ── SECTION 3: Author Revision Report (section-wise action table) ───────
     _build_author_revision_report(review_result, story, styles,
                                   h2_style, h3_style, body_style, label_style, value_style)
 
-    # ── Footer ─────────────────────────────────────────────────────────────
-    story.append(Spacer(1, 20))
-    story.append(Paragraph(
-        "This report was generated by an AI-assisted peer review system. "
-        "It is intended to support, not replace, human editorial judgment.",
-        footer_style,
-    ))
+    # ── SECTION 4: Concluding Remarks ──────────────────────────────────────
+    _build_concluding_remarks(review_result, story, styles,
+                              h2_style, h3_style, body_style)
 
     doc.build(story)
     buf.seek(0)
