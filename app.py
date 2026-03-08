@@ -780,65 +780,6 @@ def reload_guidelines():
     }), 200
 
 
-# ---------------------------------------------------------------------------
-# Admin authentication
-# ---------------------------------------------------------------------------
-
-@app.route("/admin", methods=["GET"])
-def admin_page():
-    html_path = os.path.join(os.path.dirname(__file__), "admin.html")
-    with open(html_path, "r", encoding="utf-8") as f:
-        return f.read()
-
-
-@app.route("/admin/check-auth", methods=["GET"])
-def admin_check_auth():
-    if session.get("admin_authenticated"):
-        return jsonify({"authenticated": True,
-                        "username": session.get("admin_username", "admin")}), 200
-    return jsonify({"authenticated": False}), 401
-
-
-@app.route("/admin/login", methods=["POST"])
-def admin_login():
-    data = request.get_json(silent=True) or {}
-    username = data.get("username", "").strip()
-    password = data.get("password", "")
-    cfg = _load_admin_config()
-    if username == cfg.get("username") and password == cfg.get("password"):
-        session["admin_authenticated"] = True
-        session["admin_username"] = username
-        logger.info(f"Admin login: {username}")
-        return jsonify({"authenticated": True, "username": username}), 200
-    logger.warning(f"Failed admin login for '{username}'")
-    return jsonify({"error": "Invalid username or password."}), 401
-
-
-@app.route("/admin/logout", methods=["POST"])
-def admin_logout():
-    session.clear()
-    return jsonify({"logged_out": True}), 200
-
-
-@app.route("/admin/credentials", methods=["POST"])
-@_admin_required
-def admin_change_credentials():
-    data = request.get_json(silent=True) or {}
-    new_username = data.get("username", "").strip()
-    new_password = data.get("password", "")
-    confirm      = data.get("confirm_password", "")
-    if not new_username:
-        return jsonify({"error": "Username cannot be empty."}), 400
-    if not new_password:
-        return jsonify({"error": "Password cannot be empty."}), 400
-    if new_password != confirm:
-        return jsonify({"error": "Passwords do not match."}), 400
-    if len(new_password) < 6:
-        return jsonify({"error": "Password must be at least 6 characters."}), 400
-    _save_admin_config({"username": new_username, "password": new_password})
-    session["admin_username"] = new_username
-    return jsonify({"updated": True, "username": new_username}), 200
-
 
 # ---------------------------------------------------------------------------
 # Admin guidelines CRUD (disk + GCS versioning)
