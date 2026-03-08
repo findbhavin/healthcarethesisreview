@@ -9,28 +9,57 @@
 ```
 Browser
   │
-  │  HTTP (multipart upload / JSON / file download)
+  │  HTTP (multipart upload / JSON / SSE / file download)
   ▼
 app.py  (Flask)
-  ├── GET  /                       → index.html
-  ├── GET  /health                 → {"status": "ok"}
-  ├── POST /review                 → run_review() → JSON
-  ├── GET  /download/<id>          → generate_report() → DOCX bytes
-  ├── GET  /guidelines/metadata    → YAML metadata
-  ├── GET  /guidelines/journals    → known journal list
-  ├── GET  /guidelines/changelog   → YAML changelog
-  ├── POST /guidelines/validate    → validate YAML structure
-  └── POST /admin/reload-guidelines → hot-reload YAML
+  │
+  ├── UI pages
+  │     GET  /                        → index.html (review submission)
+  │     GET  /guidelines-page         → guidelines.html (formatted viewer)
+  │     GET  /admin                   → admin.html (guidelines editor)
+  │
+  ├── Core review
+  │     POST /review                  → run_review() → SSE stream
+  │     GET  /download/<id>           → generate_report() → PDF bytes
+  │     GET  /review/<id>/poll        → poll review status (reconnect)
+  │     GET  /health                  → {"status": "ok"}
+  │
+  ├── Guidelines (public, read-only)
+  │     GET  /guidelines/full         → complete structured JSON for UI
+  │     GET  /guidelines/metadata     → version + metadata
+  │     GET  /guidelines/journals     → configured journal list
+  │     GET  /guidelines/changelog    → YAML changelog
+  │     POST /guidelines/validate     → validate YAML structure
+  │
+  ├── Payment (Razorpay, optional)
+  │     GET  /payment/config          → enabled flag + public key
+  │     POST /payment/create-order    → create Razorpay order
+  │     POST /payment/verify          → HMAC-SHA256 signature check
+  │     GET  /payment/test            → sandbox test page (dev only)
+  │
+  └── Admin (session-authenticated)
+        POST /admin/login              → authenticate
+        POST /admin/logout             → end session
+        GET  /admin/check-auth         → check session
+        POST /admin/credentials        → change username/password
+        POST /admin/reload-guidelines  → hot-reload YAML (public)
+        GET  /admin/guidelines/raw     → raw YAML text ★ auth required
+        POST /admin/guidelines/save    → validate + save YAML ★ auth required
+        POST /admin/guidelines/nlp-update → AI-assisted YAML update ★ auth required
+        GET  /admin/guidelines/versions   → GCS version history ★ auth required
+        POST /admin/guidelines/push-to-gcs → push to Cloud Storage ★ auth required
+        POST /admin/guidelines/revert     → revert to previous version ★ auth required
+        GET  /admin/guidelines/version/<f> → download specific version ★ auth required
        │
        ├── review_agent.py
        │     extract_text()        ← python-docx / pdfplumber / UTF-8
-       │     run_review()          ← Claude Opus 4.6 API
+       │     run_review()          ← Claude Sonnet 4.6 API (streaming)
        │
        ├── report_generator.py
-       │     generate_report()     ← python-docx DOCX builder
+       │     generate_report()     ← reportlab PDF builder
        │
        └── guidelines/
-             guidelines_loader.py  ← YAML → system prompt builder
+             guidelines_loader.py  ← YAML → system prompt + structured JSON
              review_guidelines.yaml ← SME-editable review framework
 ```
 
@@ -74,11 +103,27 @@ python app.py
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `ANTHROPIC_API_KEY` | Yes | — | Anthropic API key for Claude |
+| `ANTHROPIC_API_KEY` | Yes | — | Anthropic API key for Claude AI reviews |
+| `RAZORPAY_KEY_ID` | No | — | Razorpay public key — enables payment modal |
+| `RAZORPAY_KEY_SECRET` | No | — | Razorpay secret key — used for HMAC verification (server-side only) |
+| `GCS_BUCKET` | No | — | Google Cloud Storage bucket name — enables guideline version history |
+| `FLASK_SECRET_KEY` | No | random | Flask session secret — set a fixed value in production so admin sessions survive restarts |
 | `PORT` | No | `8080` | Port for Flask/gunicorn |
 | `FLASK_DEBUG` | No | `false` | Enable Flask debug mode (dev only) |
 
+If `RAZORPAY_KEY_ID` or `RAZORPAY_KEY_SECRET` is absent, payment is silently disabled — users see a free download button.
+
 **Never commit API keys to Git.** Use Cloud Run secrets or a `.env` file (excluded by `.gitignore`).
+
+### Quick-start `.env` (local development)
+
+```bash
+ANTHROPIC_API_KEY=sk-ant-your-key-here
+RAZORPAY_KEY_ID=rzp_test_xxxxxxxxxxxx      # optional — get from Razorpay Dashboard
+RAZORPAY_KEY_SECRET=your_secret_here        # optional
+FLASK_SECRET_KEY=dev-secret-change-in-prod
+FLASK_DEBUG=true
+```
 
 ---
 
@@ -88,16 +133,18 @@ python app.py
 python -m pytest tests/ -v
 ```
 
-All **57 tests** pass with no API key required — the Claude API is mocked in tests.
+All tests pass with no API key required — the Claude API is mocked in tests. Razorpay is also mocked; no sandbox account is needed.
 
 ### Test Modules
 
-| File | Tests | What It Covers |
-|------|-------|---------------|
-| `test_guidelines_loader.py` | 17 | YAML loading, validation, prompt building, journal overrides |
-| `test_text_extraction.py` | 12 | DOCX/PDF/TXT extraction using real sample files |
-| `test_report_generator.py` | 9 | DOCX output validity, content, decision colours |
-| `test_app_routes.py` | 19 | All Flask routes, error handlers, end-to-end flow |
+| File | What It Covers |
+|------|---------------|
+| `test_guidelines_loader.py` | YAML loading, validation, prompt building, `get_full_guidelines()`, journal overrides, weights, rubrics |
+| `test_text_extraction.py` | DOCX/PDF/TXT extraction using real sample files |
+| `test_report_generator.py` | PDF output validity, content, decision colours |
+| `test_app_routes.py` | Core Flask routes, `/guidelines/full`, `/guidelines-page`, `/review/<id>/poll`, error handlers, SSE stream |
+| `test_payment.py` | `/payment/config`, `/payment/create-order`, `/payment/verify` (HMAC logic), `/payment/test` sandbox page |
+| `test_admin.py` | Admin login/logout, session auth, `/admin/guidelines/raw`, save, credential validation |
 
 ### Running a single test file
 
@@ -240,11 +287,37 @@ Accepts a manuscript file and returns the AI review.
 
 ---
 
+### `GET /guidelines/full`
+
+Returns the complete structured guidelines payload consumed by the public guidelines viewer (`/guidelines-page`) and the admin UI.
+
+```json
+{
+  "metadata": { "version": "2.0", "last_updated": "2026-03-05", ... },
+  "role": "You are a senior medical journal editor...",
+  "stages": [
+    {
+      "key": "stage_1", "number": "1", "name": "Initial Editorial Screening",
+      "weight": 8, "max_score": 10,
+      "score_rubric": { "9-10": "All items present", ... },
+      "checks": [...], "decision_options": [...], "instruction": "..."
+    },
+    ...
+  ],
+  "journals": [ { "key": "NJCM", "full_name": "...", "scope": "...", ... } ],
+  "changelog": [ { "version": "2.0", "date": "2026-03-05", "changes": "..." } ]
+}
+```
+
+The `weight` and `score_rubric` fields power the WRS formula card and collapsible rubric tables on the guidelines viewer page.
+
+---
+
 ### `GET /download/<review_id>`
 
-Downloads the DOCX report for a completed review.
+Downloads the PDF report for a completed review.
 
-**Response 200:** DOCX file (binary)
+**Response 200:** PDF file (application/pdf)
 **Response 404:** Review ID not found (session expired or invalid)
 
 ---
@@ -291,9 +364,15 @@ Validates the current `review_guidelines.yaml` structure.
 
 ### `POST /admin/reload-guidelines`
 
-Hot-reloads the guidelines YAML without restarting the application. Validates first.
+Hot-reloads the guidelines YAML without restarting the application. Validates first. This endpoint is public (no session required) to support CI/CD pipelines.
 
-> Add authentication middleware before exposing this endpoint in production.
+---
+
+### Payment endpoints
+
+See **PAYMENT_GATEWAY.md** for the full payment API reference.
+
+**Sandbox test page:** `GET /payment/test` — renders an HTML page with Razorpay test card numbers and a live payment flow test. Only useful during development with test keys. Do not link to this page from the production UI.
 
 ---
 
@@ -397,10 +476,11 @@ gcloud run deploy healthcarethesisreview --image gcr.io/$PROJECT_ID/healthcareth
 
 ### Authentication
 
-The `/admin/reload-guidelines` endpoint is currently unprotected. Before using in production:
+Admin credential-sensitive routes (`/admin/guidelines/raw`, `/admin/guidelines/save`, etc.) require an active admin session (POST `/admin/login` with `admin_config.json` credentials).
+
+`/admin/reload-guidelines` is intentionally **public** to support CI/CD hot-reload without storing admin credentials in deployment scripts. If you need to restrict it, add an `X-Admin-Token` header check:
 
 ```python
-# Example: protect with a shared secret header
 @app.route("/admin/reload-guidelines", methods=["POST"])
 def reload_guidelines():
     token = request.headers.get("X-Admin-Token")
@@ -408,6 +488,8 @@ def reload_guidelines():
         return jsonify({"error": "Unauthorized"}), 401
     ...
 ```
+
+**Admin credentials in Docker:** `admin_config.json` is baked into the container image at build time. Password changes made via the admin UI are written to the file inside the running container but are **lost on the next deployment**. For persistent credentials, mount the file from Cloud Storage or store the credentials in Secret Manager.
 
 ### Logging
 
@@ -464,8 +546,11 @@ elif lower.endswith(".rtf"):
 | anthropic | 0.40.0 | Claude API client |
 | python-docx | 1.1.2 | DOCX read + write |
 | pdfplumber | 0.11.4 | PDF text extraction |
+| reportlab | 4.2.5 | PDF report generation |
 | gunicorn | 23.0.0 | Production WSGI server |
-| pyyaml | (transitive) | YAML parsing |
+| pyyaml | 6.0.1 | YAML parsing for guidelines |
+| razorpay | 1.4.2 | Payment gateway SDK (optional) |
+| google-cloud-storage | 2.18.2 | Guidelines version history in GCS (optional) |
 
 To upgrade a dependency, update `requirements.txt`, run `pip install -r requirements.txt`, run `python -m pytest tests/ -v` to confirm no regressions, then rebuild the container.
 

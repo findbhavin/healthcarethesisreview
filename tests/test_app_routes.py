@@ -295,6 +295,160 @@ class TestDownloadRoute(unittest.TestCase):
         del _review_store[review_id]
 
 
+class TestDownloadFilename(unittest.TestCase):
+    """Verify the PDF download filename is sanitised from the manuscript title."""
+
+    def setUp(self):
+        app.config["TESTING"] = True
+        self.client = app.test_client()
+
+    def test_download_content_disposition_contains_pdf(self):
+        review_id = "test-filename-check-id"
+        _review_store[review_id] = dict(SAMPLE_REVIEW_RESULT,
+                                        manuscript_title="My Test/Manuscript\\Title")
+        resp = self.client.get(f"/download/{review_id}")
+        self.assertEqual(resp.status_code, 200)
+        cd = resp.headers.get("Content-Disposition", "")
+        self.assertIn(".pdf", cd)
+        # Slashes and backslashes must be sanitised
+        self.assertNotIn("/", cd.split("filename=")[-1])
+        del _review_store[review_id]
+
+
+class TestGuidelinesFullRoute(unittest.TestCase):
+    """Tests for GET /guidelines/full — the structured JSON endpoint used by the UI."""
+
+    def setUp(self):
+        app.config["TESTING"] = True
+        self.client = app.test_client()
+
+    def test_guidelines_full_returns_200(self):
+        resp = self.client.get("/guidelines/full")
+        self.assertEqual(resp.status_code, 200)
+
+    def test_guidelines_full_is_json(self):
+        resp = self.client.get("/guidelines/full")
+        data = json.loads(resp.data)
+        self.assertIsInstance(data, dict)
+
+    def test_guidelines_full_has_required_top_level_keys(self):
+        resp = self.client.get("/guidelines/full")
+        data = json.loads(resp.data)
+        for key in ("metadata", "stages", "journals", "changelog", "role"):
+            self.assertIn(key, data, f"Missing top-level key: {key}")
+
+    def test_guidelines_full_stages_count(self):
+        resp = self.client.get("/guidelines/full")
+        data = json.loads(resp.data)
+        self.assertEqual(len(data["stages"]), 8)
+
+    def test_guidelines_full_each_stage_has_weight_and_rubric(self):
+        """Verifies the fields consumed by the improved guidelines display UI."""
+        resp = self.client.get("/guidelines/full")
+        data = json.loads(resp.data)
+        for stage in data["stages"]:
+            self.assertIn("weight", stage,
+                          f"Stage {stage.get('number')} missing 'weight' (needed by WRS display)")
+            self.assertIn("max_score", stage,
+                          f"Stage {stage.get('number')} missing 'max_score'")
+            self.assertIn("score_rubric", stage,
+                          f"Stage {stage.get('number')} missing 'score_rubric'")
+
+    def test_guidelines_full_weights_sum_to_100(self):
+        resp = self.client.get("/guidelines/full")
+        data = json.loads(resp.data)
+        total = sum(s["weight"] for s in data["stages"])
+        self.assertEqual(total, 100)
+
+    def test_guidelines_full_journals_list_nonempty(self):
+        resp = self.client.get("/guidelines/full")
+        data = json.loads(resp.data)
+        self.assertGreater(len(data["journals"]), 0)
+
+
+class TestGuidelinesPage(unittest.TestCase):
+    """Tests for GET /guidelines-page — the human-readable guidelines viewer."""
+
+    def setUp(self):
+        app.config["TESTING"] = True
+        self.client = app.test_client()
+
+    def test_guidelines_page_returns_200(self):
+        resp = self.client.get("/guidelines-page")
+        self.assertEqual(resp.status_code, 200)
+
+    def test_guidelines_page_is_html(self):
+        resp = self.client.get("/guidelines-page")
+        self.assertIn(b"<!DOCTYPE html>", resp.data)
+
+    def test_guidelines_page_contains_wrs_section(self):
+        """The improved UI includes a WRS formula section."""
+        resp = self.client.get("/guidelines-page")
+        self.assertIn(b"wrs-card", resp.data)
+
+    def test_guidelines_page_contains_rubric_styles(self):
+        """Score rubric CSS classes must be present for the collapsible tables."""
+        resp = self.client.get("/guidelines-page")
+        self.assertIn(b"rubric-table", resp.data)
+        self.assertIn(b"rubric-toggle", resp.data)
+
+    def test_guidelines_page_contains_weight_badge_styles(self):
+        """Weight circle badges CSS class must be present."""
+        resp = self.client.get("/guidelines-page")
+        self.assertIn(b"weight-circle", resp.data)
+
+    def test_guidelines_page_loads_guidelines_full_api(self):
+        """JS in the page must fetch /guidelines/full."""
+        resp = self.client.get("/guidelines-page")
+        self.assertIn(b"/guidelines/full", resp.data)
+
+
+class TestPollRoute(unittest.TestCase):
+    """Tests for GET /review/<review_id>/poll — reconnect after network drop."""
+
+    def setUp(self):
+        app.config["TESTING"] = True
+        self.client = app.test_client()
+
+    def test_poll_unknown_id_returns_404(self):
+        resp = self.client.get("/review/nonexistent-id/poll")
+        self.assertEqual(resp.status_code, 404)
+        data = json.loads(resp.data)
+        self.assertEqual(data["status"], "not_found")
+
+    def test_poll_running_review_returns_status(self):
+        review_id = "test-poll-running-id"
+        _review_store[review_id] = {"status": "running", "accumulated_text": "Partial…"}
+        resp = self.client.get(f"/review/{review_id}/poll")
+        self.assertEqual(resp.status_code, 200)
+        data = json.loads(resp.data)
+        self.assertEqual(data["status"], "running")
+        self.assertIn("accumulated_text", data)
+        del _review_store[review_id]
+
+    def test_poll_done_review_returns_full_payload(self):
+        review_id = "test-poll-done-id"
+        _review_store[review_id] = {
+            "status": "done",
+            "manuscript_title": "Poll Test Manuscript",
+            "decision": "Minor revision",
+            "word_count": 2500,
+            "weighted_score": 72.5,
+            "stage_scores": {"1": 8, "2": 9},
+            "wrs_parts": "S1×8 + S2×12",
+            "review_text": "Full review text here.",
+        }
+        resp = self.client.get(f"/review/{review_id}/poll")
+        self.assertEqual(resp.status_code, 200)
+        data = json.loads(resp.data)
+        self.assertEqual(data["status"], "done")
+        self.assertIn("review_id", data)
+        self.assertIn("decision", data)
+        self.assertIn("word_count", data)
+        self.assertIn("weighted_score", data)
+        del _review_store[review_id]
+
+
 class TestErrorHandlers(unittest.TestCase):
 
     def setUp(self):
