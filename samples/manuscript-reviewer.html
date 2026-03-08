@@ -1,0 +1,1473 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MedScript Reviewer — AI Pre-Submission Analysis</title>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Instrument+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #0f1117;
+  --surface: #181c27;
+  --surface2: #1e2335;
+  --surface3: #242840;
+  --border: #2a3050;
+  --border-bright: #3a4570;
+  --teal: #00c9b1;
+  --teal-dim: rgba(0,201,177,0.12);
+  --teal-glow: rgba(0,201,177,0.25);
+  --red: #ff5c6a;
+  --red-dim: rgba(255,92,106,0.12);
+  --amber: #ffb020;
+  --amber-dim: rgba(255,176,32,0.12);
+  --green: #3dd68c;
+  --green-dim: rgba(61,214,140,0.12);
+  --blue: #5b9cf6;
+  --blue-dim: rgba(91,156,246,0.12);
+  --text: #e8eaf0;
+  --text-muted: #7a8aa8;
+  --text-dim: #4a5570;
+  --white: #ffffff;
+  --shadow: 0 8px 32px rgba(0,0,0,0.4);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
+
+body {
+  font-family: 'Instrument Sans', system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+/* ── HEADER ──────────────────────────────── */
+.header {
+  padding: 3rem 2rem 2rem;
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+}
+
+.header::before {
+  content: '';
+  position: absolute;
+  top: -120px; left: 50%;
+  transform: translateX(-50%);
+  width: 600px; height: 300px;
+  background: radial-gradient(ellipse, rgba(0,201,177,0.08) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+.header-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: var(--teal-dim);
+  border: 1px solid rgba(0,201,177,0.3);
+  color: var(--teal);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  padding: 0.3rem 0.9rem;
+  border-radius: 20px;
+  margin-bottom: 1.2rem;
+}
+
+.pulse-dot {
+  width: 6px; height: 6px;
+  background: var(--teal);
+  border-radius: 50%;
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(1.3); }
+}
+
+.header h1 {
+  font-family: 'Instrument Serif', Georgia, serif;
+  font-size: clamp(2rem, 5vw, 3.2rem);
+  font-weight: 400;
+  color: var(--white);
+  line-height: 1.15;
+  margin-bottom: 0.7rem;
+  letter-spacing: -0.02em;
+}
+
+.header h1 span {
+  font-style: italic;
+  color: var(--teal);
+}
+
+.header-sub {
+  color: var(--text-muted);
+  font-size: 0.92rem;
+  max-width: 480px;
+  margin: 0 auto;
+  font-weight: 300;
+  line-height: 1.7;
+}
+
+/* ── MAIN CONTAINER ───────────────────────── */
+.container {
+  max-width: 920px;
+  margin: 0 auto;
+  padding: 0 1.5rem 5rem;
+}
+
+/* ── UPLOAD PANEL ─────────────────────────── */
+.upload-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 2.5rem;
+  margin-bottom: 1.5rem;
+  box-shadow: var(--shadow);
+}
+
+.upload-zone {
+  border: 2px dashed var(--border-bright);
+  border-radius: 12px;
+  padding: 3rem 2rem;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.2s;
+  position: relative;
+  background: var(--surface2);
+}
+
+.upload-zone:hover, .upload-zone.dragover {
+  border-color: var(--teal);
+  background: var(--teal-dim);
+}
+
+.upload-zone input[type="file"] {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+  width: 100%;
+  height: 100%;
+}
+
+.upload-icon {
+  font-size: 2.5rem;
+  margin-bottom: 0.8rem;
+  display: block;
+}
+
+.upload-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--white);
+  margin-bottom: 0.4rem;
+}
+
+.upload-sub {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.upload-formats {
+  display: flex;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  flex-wrap: wrap;
+}
+
+.format-tag {
+  background: var(--surface3);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 0.2rem 0.6rem;
+  border-radius: 5px;
+}
+
+/* File preview */
+.file-preview {
+  display: none;
+  align-items: center;
+  gap: 1rem;
+  padding: 1rem 1.2rem;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin-top: 1rem;
+}
+
+.file-preview.visible { display: flex; }
+
+.file-icon {
+  width: 40px; height: 40px;
+  background: var(--blue-dim);
+  border: 1px solid rgba(91,156,246,0.3);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.2rem;
+  flex-shrink: 0;
+}
+
+.file-info { flex: 1; }
+.file-name { font-size: 0.88rem; font-weight: 600; color: var(--white); }
+.file-size { font-size: 0.75rem; color: var(--text-muted); }
+
+.file-remove {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 1.1rem;
+  padding: 0.3rem;
+  border-radius: 5px;
+  transition: color 0.15s;
+}
+
+.file-remove:hover { color: var(--red); }
+
+/* Options row */
+.options-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  margin-top: 1.2rem;
+}
+
+.opt-group label {
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 0.4rem;
+}
+
+.opt-select {
+  width: 100%;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: 'Instrument Sans', sans-serif;
+  font-size: 0.85rem;
+  padding: 0.55rem 0.9rem;
+  border-radius: 8px;
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.15s;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%237a8aa8' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.8rem center;
+  padding-right: 2.2rem;
+}
+
+.opt-select:focus { border-color: var(--teal); }
+
+/* API key */
+.api-row {
+  margin-top: 1rem;
+}
+
+.api-row label {
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 0.4rem;
+}
+
+.api-input-wrap {
+  position: relative;
+}
+
+.api-input {
+  width: 100%;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: 'Instrument Sans', sans-serif;
+  font-size: 0.85rem;
+  padding: 0.55rem 2.8rem 0.55rem 0.9rem;
+  border-radius: 8px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.api-input:focus { border-color: var(--teal); }
+.api-input::placeholder { color: var(--text-dim); }
+
+.api-toggle {
+  position: absolute;
+  right: 0.7rem;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 0.2rem;
+}
+
+.api-note {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  margin-top: 0.35rem;
+}
+
+.api-note a { color: var(--teal); text-decoration: none; }
+
+/* Submit button */
+.submit-btn {
+  width: 100%;
+  margin-top: 1.5rem;
+  padding: 0.9rem 2rem;
+  background: linear-gradient(135deg, var(--teal) 0%, #00a896 100%);
+  border: none;
+  border-radius: 10px;
+  color: #041a18;
+  font-family: 'Instrument Sans', sans-serif;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  letter-spacing: 0.02em;
+}
+
+.submit-btn:hover { filter: brightness(1.08); transform: translateY(-1px); box-shadow: 0 6px 20px rgba(0,201,177,0.3); }
+.submit-btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; box-shadow: none; }
+
+/* ── ANALYZING STATE ──────────────────────── */
+.analyzing-panel {
+  display: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 3rem 2rem;
+  text-align: center;
+  margin-bottom: 1.5rem;
+}
+
+.analyzing-panel.visible { display: block; }
+
+.spinner-ring {
+  width: 56px; height: 56px;
+  border: 3px solid var(--border);
+  border-top-color: var(--teal);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+  margin: 0 auto 1.2rem;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.analyzing-title {
+  font-family: 'Instrument Serif', serif;
+  font-size: 1.4rem;
+  color: var(--white);
+  margin-bottom: 0.4rem;
+}
+
+.analyzing-sub {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.analyzing-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-width: 320px;
+  margin: 1.5rem auto 0;
+  text-align: left;
+}
+
+.astep {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  transition: color 0.3s;
+}
+
+.astep.active { color: var(--teal); }
+.astep.done { color: var(--green); }
+
+.astep-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+/* ── REPORT PANEL ─────────────────────────── */
+.report-panel {
+  display: none;
+}
+
+.report-panel.visible { display: block; }
+
+/* Score card */
+.score-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 2rem;
+  margin-bottom: 1.2rem;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 1.5rem;
+  align-items: center;
+}
+
+.score-gauge {
+  position: relative;
+  width: 90px; height: 90px;
+}
+
+.gauge-svg { transform: rotate(-90deg); }
+.gauge-bg { fill: none; stroke: var(--border); stroke-width: 6; }
+.gauge-fill { fill: none; stroke-width: 6; stroke-linecap: round; stroke-dasharray: 226; stroke-dashoffset: 226; transition: stroke-dashoffset 1.2s cubic-bezier(0.4,0,0.2,1); }
+
+.gauge-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.gauge-num {
+  font-family: 'Instrument Serif', serif;
+  font-size: 1.5rem;
+  color: var(--white);
+  line-height: 1;
+}
+
+.gauge-label {
+  font-size: 0.58rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.score-info h2 {
+  font-family: 'Instrument Serif', serif;
+  font-size: 1.4rem;
+  color: var(--white);
+  margin-bottom: 0.3rem;
+}
+
+.score-info p {
+  font-size: 0.83rem;
+  color: var(--text-muted);
+  line-height: 1.55;
+}
+
+.score-bands {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  text-align: right;
+}
+
+.band {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  font-size: 0.78rem;
+}
+
+.band-dot { width: 8px; height: 8px; border-radius: 50%; }
+.band-num { font-weight: 600; color: var(--white); min-width: 24px; }
+.band-label { color: var(--text-muted); }
+
+/* Summary chips */
+.chips-row {
+  display: flex;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+  margin-bottom: 1.2rem;
+}
+
+.chip {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.55rem 1rem;
+  border-radius: 10px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  flex: 1;
+  min-width: 130px;
+  border: 1px solid transparent;
+}
+
+.chip-critical { background: var(--red-dim); border-color: rgba(255,92,106,0.25); color: var(--red); }
+.chip-high { background: var(--amber-dim); border-color: rgba(255,176,32,0.25); color: var(--amber); }
+.chip-pass { background: var(--green-dim); border-color: rgba(61,214,140,0.25); color: var(--green); }
+.chip-info { background: var(--blue-dim); border-color: rgba(91,156,246,0.25); color: var(--blue); }
+
+.chip-num { font-family: 'Instrument Serif', serif; font-size: 1.3rem; font-weight: 400; }
+.chip-text { font-size: 0.75rem; line-height: 1.3; }
+
+/* Section reports */
+.section-reports {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin-bottom: 1.2rem;
+}
+
+.sec-report {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.sec-report-head {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  padding: 1rem 1.3rem;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s;
+  border-bottom: 1px solid transparent;
+}
+
+.sec-report-head:hover { background: var(--surface2); }
+.sec-report-head.open { border-bottom-color: var(--border); }
+
+.sec-emoji { font-size: 1.1rem; }
+
+.sec-report-meta { flex: 1; }
+.sec-report-title { font-size: 0.92rem; font-weight: 600; color: var(--white); }
+.sec-report-sub { font-size: 0.72rem; color: var(--text-muted); margin-top: 0.1rem; }
+
+.sec-score-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.mini-bar-track {
+  width: 80px; height: 4px;
+  background: var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.mini-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.8s ease;
+}
+
+.mini-score { font-size: 0.78rem; font-weight: 600; min-width: 32px; text-align: right; }
+
+.sec-chevron { color: var(--text-dim); font-size: 0.75rem; transition: transform 0.2s; }
+.sec-chevron.open { transform: rotate(90deg); }
+
+.sec-report-body {
+  display: none;
+  padding: 1rem 1.3rem 1.2rem;
+}
+
+.sec-report-body.open { display: block; }
+
+/* Findings list */
+.finding {
+  display: flex;
+  gap: 0.8rem;
+  padding: 0.65rem 0.8rem;
+  border-radius: 8px;
+  margin-bottom: 0.4rem;
+  border: 1px solid transparent;
+  align-items: flex-start;
+}
+
+.finding:last-child { margin-bottom: 0; }
+
+.finding-critical { background: var(--red-dim); border-color: rgba(255,92,106,0.15); }
+.finding-high { background: var(--amber-dim); border-color: rgba(255,176,32,0.15); }
+.finding-pass { background: var(--green-dim); border-color: rgba(61,214,140,0.15); }
+.finding-info { background: var(--blue-dim); border-color: rgba(91,156,246,0.15); }
+
+.finding-icon { font-size: 0.85rem; margin-top: 1px; flex-shrink: 0; }
+
+.finding-content { flex: 1; }
+.finding-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-bottom: 0.2rem;
+}
+
+.finding-critical .finding-label { color: var(--red); }
+.finding-high .finding-label { color: var(--amber); }
+.finding-pass .finding-label { color: var(--green); }
+.finding-info .finding-label { color: var(--blue); }
+
+.finding-text { font-size: 0.82rem; color: var(--text); line-height: 1.55; }
+.finding-rec { font-size: 0.76rem; color: var(--text-muted); margin-top: 0.25rem; font-style: italic; }
+
+/* Overall recommendation box */
+.rec-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 1.5rem;
+  margin-bottom: 1.2rem;
+}
+
+.rec-box-title {
+  font-family: 'Instrument Serif', serif;
+  font-size: 1.1rem;
+  color: var(--white);
+  margin-bottom: 0.8rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.rec-text {
+  font-size: 0.86rem;
+  color: var(--text-muted);
+  line-height: 1.75;
+}
+
+.rec-text strong { color: var(--text); font-weight: 600; }
+
+/* Priority list */
+.priority-list {
+  margin-top: 0.8rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.priority-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.5rem 0.7rem;
+  background: var(--surface2);
+  border-radius: 7px;
+  font-size: 0.81rem;
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.priority-num {
+  background: var(--teal-dim);
+  color: var(--teal);
+  font-size: 0.65rem;
+  font-weight: 700;
+  width: 18px; height: 18px;
+  min-width: 18px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1px;
+}
+
+/* Action bar */
+.action-bar {
+  display: flex;
+  gap: 0.7rem;
+  margin-top: 0.5rem;
+}
+
+.action-btn {
+  flex: 1;
+  padding: 0.7rem;
+  border-radius: 9px;
+  font-family: 'Instrument Sans', sans-serif;
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+}
+
+.action-btn:hover { background: var(--surface2); color: var(--text); border-color: var(--border-bright); }
+
+.action-btn-primary {
+  background: var(--teal-dim);
+  border-color: rgba(0,201,177,0.35);
+  color: var(--teal);
+}
+
+.action-btn-primary:hover { background: rgba(0,201,177,0.2); }
+
+/* Error state */
+.error-box {
+  display: none;
+  background: var(--red-dim);
+  border: 1px solid rgba(255,92,106,0.3);
+  border-radius: 12px;
+  padding: 1.2rem 1.5rem;
+  color: var(--red);
+  font-size: 0.85rem;
+  margin-bottom: 1.2rem;
+  line-height: 1.6;
+}
+
+.error-box.visible { display: block; }
+.error-box strong { display: block; margin-bottom: 0.3rem; font-size: 0.9rem; }
+
+/* How it works */
+.howto {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.howto-title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 1rem;
+}
+
+.howto-steps {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+}
+
+.howto-step {
+  text-align: center;
+}
+
+.howto-icon {
+  font-size: 1.5rem;
+  margin-bottom: 0.5rem;
+  display: block;
+}
+
+.howto-step-title { font-size: 0.82rem; font-weight: 600; color: var(--white); margin-bottom: 0.2rem; }
+.howto-step-desc { font-size: 0.75rem; color: var(--text-muted); line-height: 1.5; }
+
+/* Responsive */
+@media (max-width: 640px) {
+  .options-row { grid-template-columns: 1fr; }
+  .score-card { grid-template-columns: 1fr; text-align: center; }
+  .score-bands { align-items: center; text-align: center; }
+  .band { justify-content: center; }
+  .chips-row { flex-direction: column; }
+  .howto-steps { grid-template-columns: 1fr; }
+}
+
+@media print {
+  body { background: white; color: black; }
+  .upload-card, .howto, .action-bar, .submit-btn { display: none; }
+  .sec-report-body { display: block !important; }
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-badge">
+    <span class="pulse-dot"></span>
+    AI-Powered · Medical &amp; Health Sciences
+  </div>
+  <h1>Manuscript Pre-Submission<br><span>Reviewer</span></h1>
+  <p class="header-sub">Upload your manuscript and receive a detailed AI analysis against the medical journal pre-submission checklist — before you submit.</p>
+</div>
+
+<div class="container">
+
+  <!-- HOW IT WORKS -->
+  <div class="howto">
+    <div class="howto-title">How it works</div>
+    <div class="howto-steps">
+      <div class="howto-step">
+        <span class="howto-icon">📄</span>
+        <div class="howto-step-title">Upload Manuscript</div>
+        <div class="howto-step-desc">Upload your PDF or Word file</div>
+      </div>
+      <div class="howto-step">
+        <span class="howto-icon">🔍</span>
+        <div class="howto-step-title">AI Analysis</div>
+        <div class="howto-step-desc">Claude reviews all 9 checklist domains against your text</div>
+      </div>
+      <div class="howto-step">
+        <span class="howto-icon">📊</span>
+        <div class="howto-step-title">Detailed Report</div>
+        <div class="howto-step-desc">Get section-by-section findings with priority fixes</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- UPLOAD CARD -->
+  <div class="upload-card" id="uploadCard">
+    <div class="upload-zone" id="uploadZone">
+      <input type="file" id="fileInput" accept=".pdf,.doc,.docx,.txt" onchange="onFileSelected(event)">
+      <span class="upload-icon">📂</span>
+      <div class="upload-title">Drop your manuscript here</div>
+      <div class="upload-sub">or click to browse files</div>
+      <div class="upload-formats">
+        <span class="format-tag">PDF</span>
+        <span class="format-tag">DOC</span>
+        <span class="format-tag">DOCX</span>
+        <span class="format-tag">TXT</span>
+      </div>
+    </div>
+
+    <div class="file-preview" id="filePreview">
+      <div class="file-icon">📄</div>
+      <div class="file-info">
+        <div class="file-name" id="fileName">—</div>
+        <div class="file-size" id="fileSize">—</div>
+      </div>
+      <button class="file-remove" onclick="removeFile()" title="Remove file">✕</button>
+    </div>
+
+    <div class="options-row">
+      <div class="opt-group">
+        <label>Article Type</label>
+        <select class="opt-select" id="articleType">
+          <option value="original research">Original Research Article</option>
+          <option value="randomised controlled trial">Randomised Controlled Trial (RCT)</option>
+          <option value="systematic review or meta-analysis">Systematic Review / Meta-Analysis</option>
+          <option value="observational cohort study">Observational / Cohort Study</option>
+          <option value="case report">Case Report</option>
+          <option value="review article">Review Article</option>
+          <option value="clinical guideline">Clinical Guideline</option>
+          <option value="letter or commentary">Letter / Commentary</option>
+        </select>
+      </div>
+      <div class="opt-group">
+        <label>Target Journal Tier</label>
+        <select class="opt-select" id="journalTier">
+          <option value="high-impact (e.g. Lancet, NEJM, JAMA, BMJ — IF >10)">High-Impact (Lancet / NEJM / JAMA / BMJ)</option>
+          <option value="mid-tier specialist (IF 3–10)">Mid-Tier Specialist (IF 3–10)</option>
+          <option value="field-specific (IF 1–3)">Field-Specific Journal (IF 1–3)</option>
+          <option value="open access medical journal">Open Access Medical Journal</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="api-row">
+      <label>Anthropic API Key</label>
+      <div class="api-input-wrap">
+        <input type="password" class="api-input" id="apiKey" placeholder="sk-ant-api03-..." autocomplete="off">
+        <button class="api-toggle" onclick="toggleApiVis()" id="apiToggleBtn">👁</button>
+      </div>
+      <div class="api-note">Your key is used only in this browser session and never stored or transmitted to any server other than Anthropic. <a href="https://console.anthropic.com/" target="_blank">Get a key →</a></div>
+    </div>
+
+    <button class="submit-btn" id="submitBtn" onclick="analyzeManuscript()">
+      <span>🔍</span> Analyze Manuscript
+    </button>
+  </div>
+
+  <!-- ERROR BOX -->
+  <div class="error-box" id="errorBox">
+    <strong id="errorTitle">Analysis Failed</strong>
+    <span id="errorMsg"></span>
+  </div>
+
+  <!-- ANALYZING PANEL -->
+  <div class="analyzing-panel" id="analyzingPanel">
+    <div class="spinner-ring"></div>
+    <div class="analyzing-title">Analyzing your manuscript…</div>
+    <div class="analyzing-sub">This usually takes 30–60 seconds</div>
+    <div class="analyzing-steps">
+      <div class="astep" id="step1"><span class="astep-dot"></span>Reading and extracting manuscript content</div>
+      <div class="astep" id="step2"><span class="astep-dot"></span>Evaluating journal fit &amp; formatting compliance</div>
+      <div class="astep" id="step3"><span class="astep-dot"></span>Reviewing manuscript structure (IMRaD)</div>
+      <div class="astep" id="step4"><span class="astep-dot"></span>Checking ethics &amp; compliance declarations</div>
+      <div class="astep" id="step5"><span class="astep-dot"></span>Assessing language &amp; writing quality</div>
+      <div class="astep" id="step6"><span class="astep-dot"></span>Generating prioritised recommendations</div>
+    </div>
+  </div>
+
+  <!-- REPORT PANEL -->
+  <div class="report-panel" id="reportPanel">
+
+    <div class="score-card" id="scoreCard">
+      <div class="score-gauge">
+        <svg class="gauge-svg" width="90" height="90" viewBox="0 0 90 90">
+          <circle class="gauge-bg" cx="45" cy="45" r="36"/>
+          <circle class="gauge-fill" id="gaugeFill" cx="45" cy="45" r="36"/>
+        </svg>
+        <div class="gauge-center">
+          <div class="gauge-num" id="gaugeNum">—</div>
+          <div class="gauge-label">Score</div>
+        </div>
+      </div>
+      <div class="score-info">
+        <h2 id="overallVerdict">—</h2>
+        <p id="overallSummary">—</p>
+      </div>
+      <div class="score-bands" id="scoreBands"></div>
+    </div>
+
+    <div class="chips-row" id="chipsRow"></div>
+
+    <div class="rec-box" id="recBox">
+      <div class="rec-box-title">📋 Top Priority Actions</div>
+      <div class="rec-text" id="recText">—</div>
+      <div class="priority-list" id="priorityList"></div>
+    </div>
+
+    <div class="section-reports" id="sectionReports"></div>
+
+    <div class="action-bar">
+      <button class="action-btn" onclick="window.print()">🖨 Print Report</button>
+      <button class="action-btn" onclick="copyReport()">📋 Copy Summary</button>
+      <button class="action-btn action-btn-primary" onclick="resetApp()">↺ Analyze Another</button>
+    </div>
+
+  </div>
+
+</div>
+
+<script>
+// ── FILE HANDLING ──────────────────────────────────────────────────────────
+let selectedFile = null;
+let extractedText = '';
+
+const uploadZone = document.getElementById('uploadZone');
+uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('dragover'); });
+uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('dragover'));
+uploadZone.addEventListener('drop', e => {
+  e.preventDefault();
+  uploadZone.classList.remove('dragover');
+  const f = e.dataTransfer.files[0];
+  if (f) handleFile(f);
+});
+
+function onFileSelected(e) {
+  const f = e.target.files[0];
+  if (f) handleFile(f);
+}
+
+function handleFile(f) {
+  const allowed = ['application/pdf', 'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'text/plain'];
+  if (!allowed.includes(f.type) && !f.name.match(/\.(pdf|doc|docx|txt)$/i)) {
+    showError('Unsupported file type', 'Please upload a PDF, DOC, DOCX, or TXT file.');
+    return;
+  }
+  if (f.size > 20 * 1024 * 1024) {
+    showError('File too large', 'Please upload a file smaller than 20 MB.');
+    return;
+  }
+  selectedFile = f;
+  document.getElementById('fileName').textContent = f.name;
+  document.getElementById('fileSize').textContent = formatBytes(f.size);
+  document.getElementById('filePreview').classList.add('visible');
+  hideError();
+}
+
+function removeFile() {
+  selectedFile = null;
+  extractedText = '';
+  document.getElementById('fileInput').value = '';
+  document.getElementById('filePreview').classList.remove('visible');
+}
+
+function formatBytes(b) {
+  if (b < 1024) return b + ' B';
+  if (b < 1024 * 1024) return (b / 1024).toFixed(1) + ' KB';
+  return (b / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+function toggleApiVis() {
+  const inp = document.getElementById('apiKey');
+  inp.type = inp.type === 'password' ? 'text' : 'password';
+}
+
+// ── TEXT EXTRACTION ────────────────────────────────────────────────────────
+async function extractText(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+
+    // Plain text
+    if (file.type === 'text/plain' || file.name.endsWith('.txt')) {
+      reader.onload = e => resolve(e.target.result.slice(0, 60000));
+      reader.onerror = () => reject(new Error('Could not read file.'));
+      reader.readAsText(file);
+      return;
+    }
+
+    // PDF — use pdf.js via CDN
+    if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
+      reader.onload = async (e) => {
+        try {
+          const { pdfjsLib } = globalThis;
+          if (!pdfjsLib) throw new Error('PDF library not loaded. Try a TXT file for testing.');
+          pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+          const pdf = await pdfjsLib.getDocument({ data: e.target.result }).promise;
+          let text = '';
+          const maxPages = Math.min(pdf.numPages, 30);
+          for (let i = 1; i <= maxPages; i++) {
+            const page = await pdf.getPage(i);
+            const content = await page.getTextContent();
+            text += content.items.map(s => s.str).join(' ') + '\n';
+          }
+          resolve(text.slice(0, 60000));
+        } catch (err) {
+          reject(new Error('PDF extraction failed: ' + err.message));
+        }
+      };
+      reader.onerror = () => reject(new Error('Could not read PDF.'));
+      reader.readAsArrayBuffer(file);
+      return;
+    }
+
+    // DOCX — use mammoth via CDN
+    if (file.name.endsWith('.docx') || file.type.includes('wordprocessingml')) {
+      reader.onload = async (e) => {
+        try {
+          const mammoth = globalThis.mammoth;
+          if (!mammoth) throw new Error('DOCX library not loaded. Try a TXT file for testing.');
+          const result = await mammoth.extractRawText({ arrayBuffer: e.target.result });
+          resolve(result.value.slice(0, 60000));
+        } catch (err) {
+          reject(new Error('DOCX extraction failed: ' + err.message));
+        }
+      };
+      reader.onerror = () => reject(new Error('Could not read DOCX.'));
+      reader.readAsArrayBuffer(file);
+      return;
+    }
+
+    // DOC (legacy) — read as text best-effort
+    reader.onload = e => {
+      const text = e.target.result.replace(/[^\x20-\x7E\n\r\t]/g, ' ').replace(/\s+/g, ' ').slice(0, 40000);
+      resolve(text);
+    };
+    reader.onerror = () => reject(new Error('Could not read file.'));
+    reader.readAsText(file, 'latin1');
+  });
+}
+
+// ── ANALYSIS STEPS ANIMATION ───────────────────────────────────────────────
+let stepTimers = [];
+
+function animateSteps() {
+  const steps = ['step1','step2','step3','step4','step5','step6'];
+  steps.forEach((id, i) => {
+    const t1 = setTimeout(() => {
+      document.getElementById(id).classList.add('active');
+    }, i * 6000);
+    stepTimers.push(t1);
+  });
+}
+
+function clearStepTimers() {
+  stepTimers.forEach(t => clearTimeout(t));
+  stepTimers = [];
+}
+
+function markStepsDone() {
+  for (let i = 1; i <= 6; i++) {
+    const el = document.getElementById('step' + i);
+    el.classList.remove('active');
+    el.classList.add('done');
+  }
+}
+
+// ── MAIN ANALYZE FUNCTION ──────────────────────────────────────────────────
+async function analyzeManuscript() {
+  hideError();
+
+  const apiKey = document.getElementById('apiKey').value.trim();
+  const articleType = document.getElementById('articleType').value;
+  const journalTier = document.getElementById('journalTier').value;
+
+  if (!selectedFile) { showError('No file selected', 'Please upload your manuscript file first.'); return; }
+  if (!apiKey || !apiKey.startsWith('sk-ant')) { showError('API Key required', 'Please enter a valid Anthropic API key (starts with sk-ant-...). Get one at console.anthropic.com'); return; }
+
+  // Show analyzing state
+  document.getElementById('submitBtn').disabled = true;
+  document.getElementById('analyzingPanel').classList.add('visible');
+  document.getElementById('reportPanel').classList.remove('visible');
+  animateSteps();
+
+  try {
+    // Extract text
+    const text = await extractText(selectedFile);
+    if (!text || text.trim().length < 200) {
+      throw new Error('Could not extract sufficient text from the file. Please try a TXT version of your manuscript.');
+    }
+    extractedText = text;
+
+    // Build prompt
+    const prompt = buildPrompt(text, articleType, journalTier);
+
+    // Call Claude API
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true'
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 4000,
+        messages: [{ role: 'user', content: prompt }]
+      })
+    });
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.error?.message || `API error ${response.status}: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    const rawText = data.content.map(c => c.text || '').join('');
+
+    // Parse JSON from response
+    let report;
+    try {
+      const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) throw new Error('No JSON found in response');
+      report = JSON.parse(jsonMatch[0]);
+    } catch (e) {
+      throw new Error('Could not parse AI response. Please try again.');
+    }
+
+    clearStepTimers();
+    markStepsDone();
+
+    setTimeout(() => {
+      document.getElementById('analyzingPanel').classList.remove('visible');
+      renderReport(report);
+    }, 800);
+
+  } catch (err) {
+    clearStepTimers();
+    document.getElementById('analyzingPanel').classList.remove('visible');
+    document.getElementById('submitBtn').disabled = false;
+    showError('Analysis Failed', err.message);
+  }
+}
+
+// ── PROMPT BUILDER ─────────────────────────────────────────────────────────
+function buildPrompt(manuscriptText, articleType, journalTier) {
+  return `You are an expert medical journal editor and biostatistician with 20+ years of peer review experience. Analyze the following manuscript excerpt as a pre-submission review for a ${articleType} targeting a ${journalTier} journal.
+
+MANUSCRIPT TEXT (first ~60,000 characters):
+---
+${manuscriptText}
+---
+
+Perform a comprehensive pre-submission review across ALL 9 checklist domains below. For each domain, identify specific issues found in THIS manuscript (not generic advice). Be specific — quote or reference actual content from the manuscript where possible.
+
+CHECKLIST DOMAINS:
+1. Journal Fit & Formatting (scope, article type, word count, reporting guidelines like CONSORT/PRISMA/STROBE)
+2. Title, Abstract & Keywords (clarity, MeSH terms, structured abstract, numerical results in abstract)
+3. Introduction (PICO framework, gap statement, hypothesis, literature currency)
+4. Methods (study design, sample size & power calculation, statistical methods, blinding, validated tools)
+5. Results (completeness, effect sizes with CI, adverse events, figures/tables)
+6. Discussion & Conclusion (interpretation vs restatement, limitations, causal language, overclaiming)
+7. Ethics & Compliance (IRB approval, consent, Declaration of Helsinki, trial registration, authorship, COI, data availability)
+8. Language & Writing Quality (grammar, patient-first language, tense consistency, causal hedging, abbreviations)
+9. Final Submission Package (anonymisation, cover letter, file completeness)
+
+Respond ONLY with a single valid JSON object in this exact structure (no markdown, no preamble):
+
+{
+  "overall_score": <integer 0-100>,
+  "overall_verdict": "<one of: Ready to Submit | Minor Revisions Needed | Major Revisions Needed | Not Ready for Submission>",
+  "overall_summary": "<2-3 sentence plain English overall assessment of the manuscript's readiness>",
+  "critical_issues": <integer count>,
+  "high_issues": <integer count>,
+  "passed_items": <integer count>,
+  "top_priorities": [
+    "<specific action #1 the author must fix before submitting>",
+    "<specific action #2>",
+    "<specific action #3>",
+    "<specific action #4>",
+    "<specific action #5>"
+  ],
+  "sections": [
+    {
+      "id": "journal_fit",
+      "title": "Journal Fit & Formatting",
+      "emoji": "🎯",
+      "score": <0-100>,
+      "findings": [
+        {
+          "type": "<critical|high|pass|info>",
+          "text": "<specific finding referencing the manuscript>",
+          "recommendation": "<concrete actionable fix>"
+        }
+      ]
+    },
+    {
+      "id": "title_abstract",
+      "title": "Title, Abstract & Keywords",
+      "emoji": "📋",
+      "score": <0-100>,
+      "findings": [...]
+    },
+    {
+      "id": "introduction",
+      "title": "Introduction",
+      "emoji": "🔬",
+      "score": <0-100>,
+      "findings": [...]
+    },
+    {
+      "id": "methods",
+      "title": "Methods",
+      "emoji": "⚗️",
+      "score": <0-100>,
+      "findings": [...]
+    },
+    {
+      "id": "results",
+      "title": "Results",
+      "emoji": "📊",
+      "score": <0-100>,
+      "findings": [...]
+    },
+    {
+      "id": "discussion",
+      "title": "Discussion & Conclusion",
+      "emoji": "💡",
+      "score": <0-100>,
+      "findings": [...]
+    },
+    {
+      "id": "ethics",
+      "title": "Ethics & Compliance",
+      "emoji": "🏛️",
+      "score": <0-100>,
+      "findings": [...]
+    },
+    {
+      "id": "language",
+      "title": "Language & Writing Quality",
+      "emoji": "✍️",
+      "score": <0-100>,
+      "findings": [...]
+    },
+    {
+      "id": "submission",
+      "title": "Final Submission Package",
+      "emoji": "📤",
+      "score": <0-100>,
+      "findings": [...]
+    }
+  ]
+}
+
+Rules:
+- Each section must have 3-6 findings
+- Be specific to the actual manuscript content, not generic
+- "pass" type = the manuscript handles this well; "info" = neutral observation; "critical" = desk rejection risk; "high" = reviewer concern
+- Scores should reflect actual quality: 0-40 poor, 41-65 needs work, 66-85 good, 86-100 excellent
+- Keep each finding.text under 120 words
+- Keep each recommendation under 80 words`;
+}
+
+// ── RENDER REPORT ──────────────────────────────────────────────────────────
+function renderReport(r) {
+  // Score gauge
+  const score = Math.max(0, Math.min(100, r.overall_score || 0));
+  const circumference = 226;
+  const offset = circumference - (circumference * score / 100);
+  const gaugeFill = document.getElementById('gaugeFill');
+  const gaugeColor = score >= 75 ? '#3dd68c' : score >= 50 ? '#ffb020' : '#ff5c6a';
+  gaugeFill.style.stroke = gaugeColor;
+  setTimeout(() => { gaugeFill.style.strokeDashoffset = offset; }, 100);
+  document.getElementById('gaugeNum').textContent = score;
+
+  // Verdict
+  const verdictColors = {
+    'Ready to Submit': '#3dd68c',
+    'Minor Revisions Needed': '#5b9cf6',
+    'Major Revisions Needed': '#ffb020',
+    'Not Ready for Submission': '#ff5c6a'
+  };
+  const verdictEl = document.getElementById('overallVerdict');
+  verdictEl.textContent = r.overall_verdict || 'Analysis Complete';
+  verdictEl.style.color = verdictColors[r.overall_verdict] || 'var(--white)';
+
+  document.getElementById('overallSummary').textContent = r.overall_summary || '';
+
+  // Score bands
+  const bands = [
+    { color: '#ff5c6a', num: r.critical_issues || 0, label: 'Critical issues' },
+    { color: '#ffb020', num: r.high_issues || 0, label: 'High-priority issues' },
+    { color: '#3dd68c', num: r.passed_items || 0, label: 'Items passing' }
+  ];
+  document.getElementById('scoreBands').innerHTML = bands.map(b => `
+    <div class="band">
+      <span class="band-num" style="color:${b.color}">${b.num}</span>
+      <span class="band-label">${b.label}</span>
+      <span class="band-dot" style="background:${b.color}"></span>
+    </div>`).join('');
+
+  // Chips
+  document.getElementById('chipsRow').innerHTML = `
+    <div class="chip chip-critical"><span class="chip-num">${r.critical_issues || 0}</span><span class="chip-text">Critical<br>Issues</span></div>
+    <div class="chip chip-high"><span class="chip-num">${r.high_issues || 0}</span><span class="chip-text">High Priority<br>Issues</span></div>
+    <div class="chip chip-pass"><span class="chip-num">${r.passed_items || 0}</span><span class="chip-text">Checklist Items<br>Passed</span></div>
+    <div class="chip chip-info"><span class="chip-num">${score}%</span><span class="chip-text">Overall<br>Readiness Score</span></div>`;
+
+  // Top priorities
+  const priorities = r.top_priorities || [];
+  document.getElementById('priorityList').innerHTML = priorities.map((p, i) => `
+    <div class="priority-item">
+      <span class="priority-num">${i + 1}</span>
+      <span>${esc(p)}</span>
+    </div>`).join('');
+
+  // Section reports
+  const sections = r.sections || [];
+  document.getElementById('sectionReports').innerHTML = sections.map(sec => {
+    const secScore = Math.max(0, Math.min(100, sec.score || 0));
+    const barColor = secScore >= 75 ? 'var(--green)' : secScore >= 50 ? 'var(--amber)' : 'var(--red)';
+    const critCount = (sec.findings || []).filter(f => f.type === 'critical').length;
+    const subText = critCount > 0 ? `${critCount} critical issue${critCount > 1 ? 's' : ''}` : `${sec.findings?.length || 0} findings`;
+
+    const findingsHTML = (sec.findings || []).map(f => {
+      const cls = `finding-${f.type || 'info'}`;
+      const icons = { critical: '🔴', high: '🟡', pass: '✅', info: '🔵' };
+      const labels = { critical: 'Critical', high: 'High Priority', pass: 'Passed', info: 'Note' };
+      return `
+        <div class="finding ${cls}">
+          <span class="finding-icon">${icons[f.type] || '🔵'}</span>
+          <div class="finding-content">
+            <div class="finding-label">${labels[f.type] || 'Note'}</div>
+            <div class="finding-text">${esc(f.text || '')}</div>
+            ${f.recommendation ? `<div class="finding-rec">→ ${esc(f.recommendation)}</div>` : ''}
+          </div>
+        </div>`;
+    }).join('');
+
+    return `
+      <div class="sec-report">
+        <div class="sec-report-head" onclick="toggleSecReport(this)">
+          <span class="sec-emoji">${sec.emoji || '📌'}</span>
+          <div class="sec-report-meta">
+            <div class="sec-report-title">${esc(sec.title || '')}</div>
+            <div class="sec-report-sub">${subText}</div>
+          </div>
+          <div class="sec-score-bar">
+            <div class="mini-bar-track">
+              <div class="mini-bar-fill" style="width:${secScore}%; background:${barColor}"></div>
+            </div>
+            <span class="mini-score" style="color:${barColor}">${secScore}%</span>
+          </div>
+          <div class="sec-chevron">▶</div>
+        </div>
+        <div class="sec-report-body">
+          ${findingsHTML}
+        </div>
+      </div>`;
+  }).join('');
+
+  document.getElementById('reportPanel').classList.add('visible');
+  document.getElementById('submitBtn').disabled = false;
+
+  // Scroll to report
+  setTimeout(() => document.getElementById('reportPanel').scrollIntoView({ behavior: 'smooth', block: 'start' }), 200);
+}
+
+function toggleSecReport(head) {
+  const body = head.nextElementSibling;
+  const chevron = head.querySelector('.sec-chevron');
+  const isOpen = body.classList.contains('open');
+  body.classList.toggle('open', !isOpen);
+  head.classList.toggle('open', !isOpen);
+  chevron.classList.toggle('open', !isOpen);
+}
+
+// ── UTILITIES ──────────────────────────────────────────────────────────────
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function showError(title, msg) {
+  document.getElementById('errorTitle').textContent = title;
+  document.getElementById('errorMsg').textContent = msg;
+  document.getElementById('errorBox').classList.add('visible');
+}
+
+function hideError() {
+  document.getElementById('errorBox').classList.remove('visible');
+}
+
+function resetApp() {
+  removeFile();
+  document.getElementById('reportPanel').classList.remove('visible');
+  document.getElementById('analyzingPanel').classList.remove('visible');
+  document.getElementById('submitBtn').disabled = false;
+  hideError();
+  for (let i = 1; i <= 6; i++) {
+    const el = document.getElementById('step' + i);
+    el.classList.remove('active', 'done');
+  }
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function copyReport() {
+  const verdict = document.getElementById('overallVerdict').textContent;
+  const summary = document.getElementById('overallSummary').textContent;
+  const priorities = [...document.querySelectorAll('.priority-item')].map((el, i) => `${i+1}. ${el.querySelector('span:last-child').textContent}`).join('\n');
+  const text = `MANUSCRIPT PRE-SUBMISSION REPORT\n\nVerdict: ${verdict}\n\nSummary: ${summary}\n\nTop Priority Actions:\n${priorities}`;
+  navigator.clipboard.writeText(text).then(() => alert('Summary copied to clipboard!')).catch(() => alert('Copy failed. Please copy manually.'));
+}
+
+// Load external libraries
+(function loadLibs() {
+  // PDF.js
+  const pdfScript = document.createElement('script');
+  pdfScript.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+  document.head.appendChild(pdfScript);
+
+  // Mammoth (DOCX)
+  const mammothScript = document.createElement('script');
+  mammothScript.src = 'https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js';
+  document.head.appendChild(mammothScript);
+})();
+</script>
+</body>
+</html>

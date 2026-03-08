@@ -260,28 +260,46 @@ def validate_guidelines() -> dict:
 
 
 def get_guidelines_raw() -> str:
-    """Return the raw YAML text of the active guidelines (GCS or disk)."""
-    if os.environ.get("GCS_BUCKET"):
-        try:
-            from gcs_uploader import get_current_rule_from_gcs
-            raw = get_current_rule_from_gcs()
-            if raw:
-                return raw
-        except Exception as exc:
-            logger.warning(f"GCS raw fetch failed — falling back to disk: {exc}")
+    """Return the raw YAML text of the guidelines file."""
     with open(GUIDELINES_PATH, "r", encoding="utf-8") as f:
         return f.read()
 
 
 def save_guidelines_yaml(raw_yaml: str) -> dict:
-    """Validate and save new guidelines YAML to disk."""
+    """
+    Validate and atomically save raw YAML text to review_guidelines.yaml.
+    Returns {"saved": True} or {"saved": False, "errors": [...]}
+    """
+    import tempfile
+    import shutil
+
+    # Parse YAML syntax
     try:
-        _parse_yaml_str(raw_yaml)
-    except Exception as e:
-        return {"saved": False, "errors": [str(e)]}
+        data = yaml.safe_load(raw_yaml)
+    except yaml.YAMLError as e:
+        return {"saved": False, "errors": [f"YAML syntax error: {e}"]}
+
+    if not data or not isinstance(data, dict):
+        return {"saved": False, "errors": ["YAML must be a mapping at the top level."]}
+
+    # Check required keys
+    required = ["role", "stages", "output_format"]
+    missing = [k for k in required if k not in data]
+    if missing:
+        return {"saved": False, "errors": [f"Missing required keys: {missing}"]}
+
+    if "stages" not in data or not data["stages"]:
+        return {"saved": False, "errors": ["'stages' must be a non-empty mapping."]}
+
+    # Atomic write: temp file in same dir then rename
     try:
-        with open(GUIDELINES_PATH, "w", encoding="utf-8") as f:
-            f.write(raw_yaml)
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            dir=os.path.dirname(GUIDELINES_PATH), suffix=".yaml.tmp"
+        )
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
+            fh.write(raw_yaml)
+        shutil.move(tmp_path, GUIDELINES_PATH)
+        logger.info("Guidelines YAML saved successfully.")
         return {"saved": True}
     except Exception as e:
-        return {"saved": False, "errors": [str(e)]}
+        return {"saved": False, "errors": [f"Write error: {e}"]}
