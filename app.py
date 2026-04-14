@@ -21,7 +21,10 @@ POST /admin/reload-guidelines   Hot-reload guidelines without restart
 
 Environment variables
 ---------------------
-ANTHROPIC_API_KEY      : required — Anthropic API key
+AI_PROVIDER            : optional — default provider ("gemini" or "anthropic")
+AI_MODEL               : optional — default model name for selected provider
+GEMINI_API_KEY         : optional — Gemini API key (required when provider=gemini)
+ANTHROPIC_API_KEY      : optional — Anthropic API key (required when provider=anthropic)
 GCS_BUCKET             : optional — GCS bucket name for persistent PDF storage
 RAZORPAY_KEY_ID        : optional — Razorpay API key (enables payment)
 RAZORPAY_KEY_SECRET    : optional — Razorpay API secret (enables payment)
@@ -39,7 +42,7 @@ from functools import wraps
 
 from flask import Flask, request, jsonify, send_file, Response, stream_with_context, session
 
-from review_agent import run_review, extract_text, stream_review
+from review_agent import run_review, extract_text, stream_review, generate_text
 from report_generator import generate_report
 from gcs_uploader import (
     upload_report,
@@ -73,15 +76,48 @@ _ADMIN_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "admin_config.json"
 
 
 def _load_admin_config() -> dict:
+    default_config = {
+        "username": "admin",
+        "password": "prakash",
+        "ai": {
+            "provider": "gemini",
+            "model": "gemini-2.5-pro",
+            "gemini_api_key": "",
+            "anthropic_api_key": "",
+        },
+    }
     if os.path.exists(_ADMIN_CONFIG_PATH):
         with open(_ADMIN_CONFIG_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {"username": "admin", "password": "prakash"}
+            loaded = json.load(f)
+        loaded.setdefault("username", default_config["username"])
+        loaded.setdefault("password", default_config["password"])
+        loaded.setdefault("ai", {})
+        loaded["ai"].setdefault("provider", default_config["ai"]["provider"])
+        loaded["ai"].setdefault("model", default_config["ai"]["model"])
+        loaded["ai"].setdefault("gemini_api_key", "")
+        loaded["ai"].setdefault("anthropic_api_key", "")
+        return loaded
+    return default_config
 
 
 def _save_admin_config(config: dict) -> None:
     with open(_ADMIN_CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
+
+
+def _resolve_ai_config() -> dict:
+    cfg = _load_admin_config().get("ai", {})
+    provider = (cfg.get("provider") or os.environ.get("AI_PROVIDER") or "gemini").strip().lower()
+    model = (cfg.get("model") or os.environ.get("AI_MODEL") or "").strip()
+    if not model:
+        model = "gemini-2.5-pro" if provider == "gemini" else "claude-sonnet-4-6"
+
+    return {
+        "provider": provider,
+        "model": model,
+        "gemini_api_key": (cfg.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY") or "").strip(),
+        "anthropic_api_key": (cfg.get("anthropic_api_key") or os.environ.get("ANTHROPIC_API_KEY") or "").strip(),
+    }
 
 
 def _admin_required(f):
@@ -196,6 +232,7 @@ def review():
         f"Received '{filename}' ({len(file_bytes):,} bytes) "
         f"journal='{journal_name}' article_type='{article_type}' tier='{journal_tier}'"
     )
+    ai_config = _resolve_ai_config()
 
     # Assign review_id BEFORE the generator so the client can use it
     # to resume/poll if the SSE connection drops mid-stream (e.g. phone lock).
@@ -212,6 +249,7 @@ def review():
             journal_name=journal_name,
             article_type=article_type,
             journal_tier=journal_tier,
+            ai_config=ai_config,
         ):
             if event["type"] == "chunk":
                 # Accumulate text so poll endpoint can return partial progress
@@ -696,10 +734,60 @@ def admin_change_credentials():
     if len(new_password) < 6:
         return jsonify({"error": "Password must be at least 6 characters."}), 400
 
-    _save_admin_config({"username": new_username, "password": new_password})
+    cfg = _load_admin_config()
+    cfg["username"] = new_username
+    cfg["password"] = new_password
+    _save_admin_config(cfg)
     session["admin_username"] = new_username
     logger.info(f"Admin credentials updated to username '{new_username}'")
     return jsonify({"updated": True, "username": new_username}), 200
+
+
+@app.route("/admin/ai-config", methods=["GET"])
+@_admin_required
+def admin_get_ai_config():
+    """Get current AI provider/model settings (keys are masked)."""
+    cfg = _resolve_ai_config()
+    return jsonify({
+        "provider": cfg["provider"],
+        "model": cfg["model"],
+        "has_gemini_api_key": bool(cfg["gemini_api_key"]),
+        "has_anthropic_api_key": bool(cfg["anthropic_api_key"]),
+    }), 200
+
+
+@app.route("/admin/ai-config", methods=["POST"])
+@_admin_required
+def admin_set_ai_config():
+    """Update AI provider/model/key settings."""
+    data = request.get_json(silent=True) or {}
+    provider = (data.get("provider") or "gemini").strip().lower()
+    model = (data.get("model") or "").strip()
+    gemini_api_key = (data.get("gemini_api_key") or "").strip()
+    anthropic_api_key = (data.get("anthropic_api_key") or "").strip()
+
+    if provider not in ("gemini", "anthropic"):
+        return jsonify({"error": "provider must be 'gemini' or 'anthropic'."}), 400
+    if not model:
+        model = "gemini-2.5-pro" if provider == "gemini" else "claude-sonnet-4-6"
+
+    cfg = _load_admin_config()
+    cfg.setdefault("ai", {})
+    cfg["ai"]["provider"] = provider
+    cfg["ai"]["model"] = model
+    if "gemini_api_key" in data:
+        cfg["ai"]["gemini_api_key"] = gemini_api_key
+    if "anthropic_api_key" in data:
+        cfg["ai"]["anthropic_api_key"] = anthropic_api_key
+    _save_admin_config(cfg)
+
+    return jsonify({
+        "updated": True,
+        "provider": provider,
+        "model": model,
+        "has_gemini_api_key": bool(cfg["ai"].get("gemini_api_key")),
+        "has_anthropic_api_key": bool(cfg["ai"].get("anthropic_api_key")),
+    }), 200
 
 
 # ---------------------------------------------------------------------------
@@ -827,17 +915,10 @@ def admin_guidelines_nlp_update():
     if not nlp_request:
         return jsonify({"error": "No update request provided."}), 400
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        return jsonify({"error": "ANTHROPIC_API_KEY not configured."}), 503
-
     try:
         current_yaml = get_guidelines_raw()
     except Exception as e:
         return jsonify({"error": f"Could not load current guidelines: {e}"}), 500
-
-    import anthropic as _anthropic
-    client = _anthropic.Anthropic(api_key=api_key)
 
     system_prompt = (
         "You are an expert medical journal editor and YAML editor. "
@@ -859,15 +940,9 @@ def admin_guidelines_nlp_update():
     )
 
     try:
-        message = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=8192,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_msg}],
-        )
-        raw_response = message.content[0].text
+        raw_response = generate_text(system_prompt, user_msg, ai_config=_resolve_ai_config())
     except Exception as e:
-        logger.exception("NLP guideline update Claude call failed")
+        logger.exception("NLP guideline update AI call failed")
         return jsonify({"error": f"AI call failed: {e}"}), 500
 
     # Parse <summary> and <yaml> blocks from response

@@ -88,8 +88,11 @@ cd healthcarethesisreview
 pip install -r requirements.txt
 pip install pytest   # for running tests
 
-# Set environment variables
-export ANTHROPIC_API_KEY="sk-ant-your-key-here"
+# Set environment variables (Gemini default)
+export GEMINI_API_KEY="AIza-your-key-here"
+# Optional Anthropic override
+# export AI_PROVIDER="anthropic"
+# export ANTHROPIC_API_KEY="sk-ant-your-key-here"
 export FLASK_DEBUG=true   # optional: enables auto-reload
 
 # Start the development server
@@ -103,7 +106,10 @@ python app.py
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `ANTHROPIC_API_KEY` | Yes | — | Anthropic API key for Claude AI reviews |
+| `AI_PROVIDER` | No | `gemini` | LLM provider (`gemini` or `anthropic`) |
+| `AI_MODEL` | No | provider default | Model name used for review generation |
+| `GEMINI_API_KEY` | Conditionally | — | Required when `AI_PROVIDER=gemini` |
+| `ANTHROPIC_API_KEY` | Conditionally | — | Required when `AI_PROVIDER=anthropic` |
 | `RAZORPAY_KEY_ID` | No | — | Razorpay public key — enables payment modal |
 | `RAZORPAY_KEY_SECRET` | No | — | Razorpay secret key — used for HMAC verification (server-side only) |
 | `GCS_BUCKET` | No | — | Google Cloud Storage bucket name — enables guideline version history |
@@ -118,7 +124,9 @@ If `RAZORPAY_KEY_ID` or `RAZORPAY_KEY_SECRET` is absent, payment is silently dis
 ### Quick-start `.env` (local development)
 
 ```bash
-ANTHROPIC_API_KEY=sk-ant-your-key-here
+GEMINI_API_KEY=AIza-your-key-here
+# AI_PROVIDER=anthropic
+# ANTHROPIC_API_KEY=sk-ant-your-key-here
 RAZORPAY_KEY_ID=rzp_test_xxxxxxxxxxxx      # optional — get from Razorpay Dashboard
 RAZORPAY_KEY_SECRET=your_secret_here        # optional
 FLASK_SECRET_KEY=dev-secret-change-in-prod
