@@ -447,8 +447,7 @@ def payment_verify():
 # Test payment page (sandbox only — for manual QA)
 # ---------------------------------------------------------------------------
 
-@app.route("/payment/test", methods=["GET"])
-def payment_test_page():
+def _render_payment_test_page():
     """
     Sandbox test page for manually verifying the Razorpay payment flow.
     Creates a dummy review entry so a real payment order can be created.
@@ -615,6 +614,19 @@ async function startTestPayment() {{
 </body>
 </html>"""
     return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+
+
+@app.route("/payment/test", methods=["GET"])
+def payment_test_page():
+    """Backward-compatible public payment test page."""
+    return _render_payment_test_page()
+
+
+@app.route("/admin/payment-test", methods=["GET"])
+@_admin_required
+def admin_payment_test_page():
+    """Admin-only payment test page for Razorpay sandbox QA."""
+    return _render_payment_test_page()
 
 
 # ---------------------------------------------------------------------------
