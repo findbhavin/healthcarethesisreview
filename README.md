@@ -1,6 +1,6 @@
 # AI-Assisted Peer Review System
 
-A web application that automates the 8-stage editorial peer review of healthcare journal manuscripts using Claude AI (claude-opus-4-6). Editors upload a manuscript (DOCX, PDF, or TXT) and receive a structured review report covering methodology, references, ethics, and an editorial recommendation.
+A web application that automates the 8-stage editorial peer review of healthcare journal manuscripts using configurable AI providers (Gemini by default, Anthropic optional). Editors upload a manuscript (DOCX, PDF, or TXT) and receive a structured review report covering methodology, references, ethics, and an editorial recommendation.
 
 ---
 
@@ -14,8 +14,11 @@ cd healthcarethesisreview
 # 2. Install dependencies
 pip install -r requirements.txt
 
-# 3. Set your Anthropic API key
-export ANTHROPIC_API_KEY="sk-ant-..."
+# 3. Set your API key (Gemini is default)
+export GEMINI_API_KEY="AIza..."
+# Optional alternative:
+# export AI_PROVIDER="anthropic"
+# export ANTHROPIC_API_KEY="sk-ant-..."
 
 # 4. Run the app
 python app.py
@@ -30,7 +33,7 @@ python app.py
 ```
 healthcarethesisreview/
 ├── app.py                      Flask web server + all HTTP routes
-├── review_agent.py             Text extraction + Claude API call
+├── review_agent.py             Text extraction + configurable AI provider calls
 ├── report_generator.py         DOCX report generation
 ├── index.html                  Single-page web UI
 ├── requirements.txt            Python dependencies

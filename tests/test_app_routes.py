@@ -207,7 +207,12 @@ class TestReviewRoute(unittest.TestCase):
         with open(SAMPLE_DOCX, "rb") as f:
             docx_bytes = f.read()
 
-        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test-key"}):
+        with patch("app._resolve_ai_config", return_value={
+            "provider": "anthropic",
+            "model": "claude-sonnet-4-6",
+            "anthropic_api_key": "sk-ant-test-key",
+            "gemini_api_key": "",
+        }):
             resp = self.client.post(
                 "/review",
                 data={
@@ -238,7 +243,12 @@ class TestReviewRoute(unittest.TestCase):
 
         txt_content = b"Title: Sample Article\n\nAbstract: A study of X in Y population."
 
-        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test-key"}):
+        with patch("app._resolve_ai_config", return_value={
+            "provider": "anthropic",
+            "model": "claude-sonnet-4-6",
+            "anthropic_api_key": "sk-ant-test-key",
+            "gemini_api_key": "",
+        }):
             resp = self.client.post(
                 "/review",
                 data={"file": (io.BytesIO(txt_content), "sample.txt")},
@@ -252,11 +262,11 @@ class TestReviewRoute(unittest.TestCase):
         self.assertIn("review_id", done_events[0])
 
     def test_review_missing_api_key_returns_error_event(self):
-        """Without ANTHROPIC_API_KEY, an SSE error event should be returned."""
+        """Without configured provider key, an SSE error event should be returned."""
         with open(SAMPLE_DOCX, "rb") as f:
             docx_bytes = f.read()
 
-        env_without_key = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+        env_without_key = {k: v for k, v in os.environ.items() if k != "GEMINI_API_KEY"}
         with patch.dict(os.environ, env_without_key, clear=True):
             resp = self.client.post(
                 "/review",
@@ -268,7 +278,7 @@ class TestReviewRoute(unittest.TestCase):
         events = _parse_sse(resp.data)
         error_events = [e for e in events if e.get("type") == "error"]
         self.assertEqual(len(error_events), 1)
-        self.assertIn("ANTHROPIC_API_KEY", error_events[0]["error"])
+        self.assertIn("GEMINI_API_KEY", error_events[0]["error"])
 
 
 class TestDownloadRoute(unittest.TestCase):
