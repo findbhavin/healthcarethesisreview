@@ -109,11 +109,11 @@ class TestPaymentConfig(unittest.TestCase):
         for field in ("enabled", "key_id", "amount", "currency", "description", "amount_display"):
             self.assertIn(field, data, f"Missing field: {field}")
 
-    def test_config_amount_is_10000_paise(self):
-        """₹100 = 10000 paise."""
+    def test_config_amount_is_5000_paise(self):
+        """₹50 = 5000 paise."""
         resp = self.client.get("/payment/config")
         data = json.loads(resp.data)
-        self.assertEqual(data["amount"], 10_000)
+        self.assertEqual(data["amount"], 5_000)
 
     def test_config_currency_is_inr(self):
         resp = self.client.get("/payment/config")
@@ -173,7 +173,7 @@ class TestPaymentCreateOrder(unittest.TestCase):
         """Mock the razorpay client to return a fake order."""
         mock_order = {
             "id": DUMMY_ORDER_ID,
-            "amount": 10_000,
+            "amount": 5_000,
             "currency": "INR",
         }
         mock_client = MagicMock()
@@ -193,7 +193,7 @@ class TestPaymentCreateOrder(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         data = json.loads(resp.data)
         self.assertEqual(data["order_id"], DUMMY_ORDER_ID)
-        self.assertEqual(data["amount"], 10_000)
+        self.assertEqual(data["amount"], 5_000)
         self.assertEqual(data["currency"], "INR")
         self.assertEqual(data["review_id"], DUMMY_REVIEW_ID)
         self.assertIn("key_id", data)

@@ -8,3 +8,6 @@ gunicorn==23.0.0
 reportlab==4.2.5
 google-cloud-storage==2.18.2
 razorpay==1.4.2
+# razorpay 1.x imports pkg_resources at client init, which requires setuptools.
+# Python 3.12-slim no longer bundles setuptools, so declare it explicitly.
+setuptools>=75.0.0

@@ -10,7 +10,7 @@ GET  /guidelines-page           Serve the Guidelines page (guidelines.html)
 GET  /health                    Health check (used by Cloud Run)
 POST /review                    Stream 8-stage AI peer review via SSE (text/event-stream)
 GET  /download/<review_id>      Download the PDF review report
-POST /payment/create-order      Create a Razorpay payment order (₹100 per document)
+POST /payment/create-order      Create a Razorpay payment order (₹50 per document)
 POST /payment/verify            Verify Razorpay payment signature and mark review as paid
 GET  /guidelines/full           Return complete guidelines data (for UI)
 GET  /guidelines/metadata       Return current guidelines version/metadata
@@ -144,10 +144,10 @@ _review_store: dict[str, dict] = {}
 RAZORPAY_KEY_ID     = os.environ.get("RAZORPAY_KEY_ID", "")
 RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "")
 
-# Payment amount in paise (100 INR = 10000 paise)
-PAYMENT_AMOUNT_PAISE   = 10_000  # ₹100
+# Payment amount in paise (50 INR = 5000 paise)
+PAYMENT_AMOUNT_PAISE   = 5_000  # ₹50
 PAYMENT_CURRENCY       = "INR"
-PAYMENT_DESCRIPTION    = "Peer Review Report Download — ₹100 per document"
+PAYMENT_DESCRIPTION    = "Peer Review Report Download — ₹50 per document"
 
 PAYMENT_ENABLED = bool(RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET)
 
@@ -390,7 +390,7 @@ def payment_config():
         "amount": PAYMENT_AMOUNT_PAISE,
         "currency": PAYMENT_CURRENCY,
         "description": PAYMENT_DESCRIPTION,
-        "amount_display": "₹100",
+        "amount_display": "₹50",
     })
 
 
@@ -400,7 +400,7 @@ def payment_create_order():
     Create a Razorpay order for downloading a review PDF.
 
     JSON body: {"review_id": "..."}
-    Returns: {"order_id": "...", "amount": 10000, "currency": "INR", "key_id": "..."}
+    Returns: {"order_id": "...", "amount": 5000, "currency": "INR", "key_id": "..."}
     """
     if not PAYMENT_ENABLED:
         return jsonify({"error": "Payment gateway not configured."}), 503
@@ -551,12 +551,12 @@ def _render_payment_test_page():
   <h3 style="margin-top:0; color:#00c9b1">Test Details</h3>
   <table>
     <tr><td>Review ID</td><td><code>{test_review_id}</code></td></tr>
-    <tr><td>Amount</td><td><b>&#8377;100</b> (10,000 paise)</td></tr>
+    <tr><td>Amount</td><td><b>&#8377;50</b> (5,000 paise)</td></tr>
     <tr><td>Currency</td><td>{currency}</td></tr>
     <tr><td>Key ID</td><td><code>{key_id or "not set"}</code></td></tr>
   </table>
   <button class="btn" id="payBtn" {'disabled' if not enabled else ''} onclick="startTestPayment()">
-    &#128179; Pay &#8377;100 — Test Payment
+    &#128179; Pay &#8377;50 — Test Payment
   </button>
 </div>
 
@@ -635,7 +635,7 @@ async function startTestPayment() {{
       }},
       modal: {{ ondismiss: function() {{
         document.getElementById('payBtn').disabled = false;
-        document.getElementById('payBtn').textContent = 'Pay &#8377;100 — Test Payment';
+        document.getElementById('payBtn').textContent = 'Pay &#8377;50 — Test Payment';
       }} }},
       theme: {{ color: '#00c9b1' }}
     }};
@@ -645,7 +645,7 @@ async function startTestPayment() {{
     result.className = 'card warn';
     result.innerHTML = '<b>Error:</b> ' + e.message;
     document.getElementById('payBtn').disabled = false;
-    document.getElementById('payBtn').textContent = 'Pay &#8377;100 — Test Payment';
+    document.getElementById('payBtn').textContent = 'Pay &#8377;50 — Test Payment';
   }}
 }}
 </script>

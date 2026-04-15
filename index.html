@@ -656,12 +656,12 @@ body {
     <h2>Support This Service</h2>
     <p>Would you like to make a small contribution to help sustain this peer review service? Paying is entirely optional.</p>
     <div class="price-badge">
-      ₹100
-      <small>~$1.20 USD per document · International cards accepted</small>
+      ₹50
+      <small>~$0.60 USD per document · International cards accepted</small>
     </div>
     <div class="modal-actions">
       <button class="action-btn action-btn-primary" id="payBtn" onclick="startPayment()">
-        🔒 Pay ₹100 &amp; Download
+        🔒 Pay ₹50 &amp; Download
       </button>
       <button class="action-btn" onclick="skipPaymentAndDownload()">
         Download Free
@@ -1233,13 +1233,13 @@ async function startPayment() {
         else alert('Payment verification failed. Please download free.');
       },
       theme: { color: '#00c9b1' },
-      modal: { ondismiss: () => { btn.disabled=false; btn.textContent='🔒 Pay ₹100 & Download'; } },
+      modal: { ondismiss: () => { btn.disabled=false; btn.textContent='🔒 Pay ₹50 & Download'; } },
     });
     rzp.open();
   } catch (e) {
     alert('Payment error: ' + e.message);
   } finally {
-    btn.disabled=false; btn.textContent='🔒 Pay ₹100 & Download';
+    btn.disabled=false; btn.textContent='🔒 Pay ₹50 & Download';
   }
 }
 function downloadFromCloud() {
