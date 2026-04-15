@@ -38,6 +38,9 @@ import io
 import hmac
 import hashlib
 import secrets
+import base64
+import urllib.request
+import urllib.error
 from functools import wraps
 
 from flask import Flask, request, jsonify, send_file, Response, stream_with_context, session
@@ -150,6 +153,49 @@ PAYMENT_CURRENCY       = "INR"
 PAYMENT_DESCRIPTION    = "Peer Review Report Download — ₹50 per document"
 
 PAYMENT_ENABLED = bool(RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET)
+
+RAZORPAY_ORDERS_URL = "https://api.razorpay.com/v1/orders"
+
+
+def _create_razorpay_order(amount_paise: int, currency: str, receipt: str, notes: dict) -> dict:
+    """
+    Create a Razorpay order by calling the Orders REST API directly.
+
+    We call the API with stdlib urllib instead of the `razorpay` Python SDK
+    to avoid the SDK's dependency on `pkg_resources`, which was removed from
+    `setuptools` 81. This keeps the container footprint small and immune to
+    upstream packaging churn.
+
+    Returns the parsed JSON order dict (contains at least "id", "amount",
+    "currency"). Raises RuntimeError with the Razorpay error body on failure.
+    """
+    auth_header = "Basic " + base64.b64encode(
+        f"{RAZORPAY_KEY_ID}:{RAZORPAY_KEY_SECRET}".encode()
+    ).decode()
+    payload = json.dumps({
+        "amount": amount_paise,
+        "currency": currency,
+        "receipt": receipt,
+        "notes": notes,
+    }).encode()
+    req = urllib.request.Request(
+        RAZORPAY_ORDERS_URL,
+        data=payload,
+        headers={
+            "Authorization": auth_header,
+            "Content-Type": "application/json",
+            "User-Agent": "healthcarethesisreview/1.0",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Razorpay API {e.code}: {err_body}") from e
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"Razorpay API unreachable: {e.reason}") from e
 
 
 def allowed_file(filename: str) -> bool:
@@ -411,17 +457,15 @@ def payment_create_order():
         return jsonify({"error": "Invalid or expired review ID."}), 400
 
     try:
-        import razorpay
-        client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
-        order = client.order.create({
-            "amount": PAYMENT_AMOUNT_PAISE,
-            "currency": PAYMENT_CURRENCY,
-            "receipt": f"review_{review_id[:16]}",
-            "notes": {
+        order = _create_razorpay_order(
+            amount_paise=PAYMENT_AMOUNT_PAISE,
+            currency=PAYMENT_CURRENCY,
+            receipt=f"review_{review_id[:16]}",
+            notes={
                 "review_id": review_id,
                 "product": "Peer Review PDF Download",
             },
-        })
+        )
         logger.info(f"Razorpay order created: {order['id']} for review {review_id}")
         return jsonify({
             "order_id": order["id"],

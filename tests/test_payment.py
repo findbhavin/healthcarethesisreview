@@ -9,16 +9,17 @@ Tests cover:
                                 bad signature → 400, valid HMAC → 200)
   - GET  /payment/test         (sandbox page renders correctly)
 
-No real Razorpay API calls are made — razorpay.Client is mocked.
+No real Razorpay API calls are made — app._create_razorpay_order is mocked.
 """
 
 import hashlib
 import hmac as hmac_lib
+import io
 import json
 import os
 import sys
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -170,20 +171,18 @@ class TestPaymentCreateOrder(unittest.TestCase):
         self.assertIn("error", data)
 
     def test_create_order_valid_review_id_returns_order(self):
-        """Mock the razorpay client to return a fake order."""
+        """Mock _create_razorpay_order to return a fake order."""
         mock_order = {
             "id": DUMMY_ORDER_ID,
             "amount": 5_000,
             "currency": "INR",
         }
-        mock_client = MagicMock()
-        mock_client.order.create.return_value = mock_order
 
         import app as app_module
         with patch.object(app_module, "PAYMENT_ENABLED", True), \
              patch.object(app_module, "RAZORPAY_KEY_ID", TEST_KEY_ID), \
              patch.object(app_module, "RAZORPAY_KEY_SECRET", TEST_KEY_SECRET), \
-             patch("razorpay.Client", return_value=mock_client):
+             patch.object(app_module, "_create_razorpay_order", return_value=mock_order):
             resp = self.client.post(
                 "/payment/create-order",
                 data=json.dumps({"review_id": DUMMY_REVIEW_ID}),
@@ -199,14 +198,15 @@ class TestPaymentCreateOrder(unittest.TestCase):
         self.assertIn("key_id", data)
 
     def test_create_order_razorpay_failure_returns_500(self):
-        """If the razorpay API throws, the endpoint should return 500."""
-        mock_client = MagicMock()
-        mock_client.order.create.side_effect = Exception("Razorpay API unavailable")
-
+        """If the Razorpay REST call throws, the endpoint should return 500."""
         import app as app_module
         with patch.object(app_module, "PAYMENT_ENABLED", True), \
              patch.object(app_module, "RAZORPAY_KEY_SECRET", TEST_KEY_SECRET), \
-             patch("razorpay.Client", return_value=mock_client):
+             patch.object(
+                 app_module,
+                 "_create_razorpay_order",
+                 side_effect=RuntimeError("Razorpay API unavailable"),
+             ):
             resp = self.client.post(
                 "/payment/create-order",
                 data=json.dumps({"review_id": DUMMY_REVIEW_ID}),
@@ -216,6 +216,99 @@ class TestPaymentCreateOrder(unittest.TestCase):
         self.assertEqual(resp.status_code, 500)
         data = json.loads(resp.data)
         self.assertIn("error", data)
+
+
+# ---------------------------------------------------------------------------
+# _create_razorpay_order (direct HTTP helper)
+# ---------------------------------------------------------------------------
+
+class TestCreateRazorpayOrderHelper(unittest.TestCase):
+    """
+    Unit-test the direct-HTTP helper to confirm the REST call is shaped
+    correctly — Basic auth header, JSON body, POST method — before hitting
+    Razorpay's live API.
+    """
+
+    def test_helper_posts_correct_request_and_parses_response(self):
+        import base64 as _b64
+        from unittest.mock import MagicMock
+        import app as app_module
+
+        fake_response_body = json.dumps({
+            "id": "order_HELPERTEST",
+            "amount": 5_000,
+            "currency": "INR",
+            "receipt": "review_abc",
+        }).encode()
+
+        fake_resp = MagicMock()
+        fake_resp.read.return_value = fake_response_body
+        fake_resp.__enter__ = lambda self_: self_
+        fake_resp.__exit__ = lambda *_args: False
+
+        captured = {}
+
+        def fake_urlopen(req, timeout):
+            captured["url"] = req.full_url
+            captured["method"] = req.get_method()
+            captured["headers"] = dict(req.header_items())
+            captured["body"] = req.data
+            captured["timeout"] = timeout
+            return fake_resp
+
+        with patch.object(app_module, "RAZORPAY_KEY_ID", "rzp_test_helperkey"), \
+             patch.object(app_module, "RAZORPAY_KEY_SECRET", "helpersecret"), \
+             patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            result = app_module._create_razorpay_order(
+                amount_paise=5_000,
+                currency="INR",
+                receipt="review_abc",
+                notes={"review_id": "abc"},
+            )
+
+        self.assertEqual(result["id"], "order_HELPERTEST")
+        self.assertEqual(captured["url"], "https://api.razorpay.com/v1/orders")
+        self.assertEqual(captured["method"], "POST")
+
+        # Headers come back title-cased from header_items()
+        lc_headers = {k.lower(): v for k, v in captured["headers"].items()}
+        self.assertEqual(lc_headers["content-type"], "application/json")
+        expected_auth = "Basic " + _b64.b64encode(
+            b"rzp_test_helperkey:helpersecret"
+        ).decode()
+        self.assertEqual(lc_headers["authorization"], expected_auth)
+
+        body = json.loads(captured["body"].decode())
+        self.assertEqual(body["amount"], 5_000)
+        self.assertEqual(body["currency"], "INR")
+        self.assertEqual(body["receipt"], "review_abc")
+        self.assertEqual(body["notes"], {"review_id": "abc"})
+
+    def test_helper_raises_runtime_error_on_http_error(self):
+        import urllib.error
+        import app as app_module
+
+        http_err = urllib.error.HTTPError(
+            url="https://api.razorpay.com/v1/orders",
+            code=400,
+            msg="Bad Request",
+            hdrs=None,
+            fp=io.BytesIO(b'{"error":{"description":"bad amount"}}'),
+        )
+
+        with patch.object(app_module, "RAZORPAY_KEY_ID", "rzp_test_x"), \
+             patch.object(app_module, "RAZORPAY_KEY_SECRET", "s"), \
+             patch("urllib.request.urlopen", side_effect=http_err):
+            with self.assertRaises(RuntimeError) as cm:
+                app_module._create_razorpay_order(
+                    amount_paise=5_000,
+                    currency="INR",
+                    receipt="r",
+                    notes={},
+                )
+
+        self.assertIn("400", str(cm.exception))
+        self.assertIn("bad amount", str(cm.exception))
 
 
 # ---------------------------------------------------------------------------
