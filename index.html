@@ -690,8 +690,9 @@ async function loadPaymentConfig() {
         const s = document.createElement('script');
         s.src = 'https://checkout.razorpay.com/v1/checkout.js';
         s.async = true;
+        s.onload  = () => { razorpayLoaded = true; };
+        s.onerror = () => { console.error('Failed to load Razorpay Checkout JS'); };
         document.head.appendChild(s);
-        razorpayLoaded = true;
       }
     }
   } catch (_) {}
@@ -1210,14 +1211,20 @@ function skipPaymentAndDownload() {
 async function startPayment() {
   if (!paymentConfig || !paymentConfig.enabled) { skipPaymentAndDownload(); return; }
   const btn = document.getElementById('payBtn');
+  const modal = document.getElementById('paymentModal');
   btn.disabled = true; btn.textContent = 'Creating order…';
   try {
+    if (typeof Razorpay === 'undefined') {
+      throw new Error('Razorpay Checkout not loaded. Please refresh the page and try again.');
+    }
     const res = await fetch('/payment/create-order', {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({ review_id: currentReviewId }),
     });
     if (!res.ok) throw new Error((await res.json().catch(()=>({}))).error || 'Order failed');
     const order = await res.json();
+    // Hide our modal so it doesn't cover Razorpay's checkout overlay
+    modal.style.display = 'none';
     const rzp = new Razorpay({
       key: order.key_id, amount: order.amount, currency: order.currency,
       name: 'AI Peer Review System', description: 'Peer Review PDF Download',
@@ -1228,18 +1235,21 @@ async function startPayment() {
           body: JSON.stringify({...response, review_id: currentReviewId}),
         });
         const vd = await v.json();
-        document.getElementById('paymentModal').style.display = 'none';
         if (vd.verified) doDownload();
-        else alert('Payment verification failed. Please download free.');
+        else { modal.style.display = 'flex'; alert('Payment verification failed. Please download free.'); }
       },
       theme: { color: '#00c9b1' },
-      modal: { ondismiss: () => { btn.disabled=false; btn.textContent='🔒 Pay ₹50 & Download'; } },
+      modal: { ondismiss: () => {
+        // User closed Razorpay popup — re-show our modal
+        modal.style.display = 'flex';
+        btn.disabled = false; btn.textContent = '🔒 Pay ₹50 & Download';
+      }},
     });
     rzp.open();
   } catch (e) {
+    modal.style.display = 'flex';
+    btn.disabled = false; btn.textContent = '🔒 Pay ₹50 & Download';
     alert('Payment error: ' + e.message);
-  } finally {
-    btn.disabled=false; btn.textContent='🔒 Pay ₹50 & Download';
   }
 }
 function downloadFromCloud() {
