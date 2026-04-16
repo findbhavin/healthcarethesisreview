@@ -679,6 +679,7 @@ let paymentConfig    = null;
 let razorpayLoaded   = false;
 let fullReviewText   = '';
 let stepTimers       = [];
+let pendingOrderId   = null;  // tracks order awaiting payment (mobile UPI fallback)
 
 // ── PAYMENT CONFIG ────────────────────────────────────────────────────────
 async function loadPaymentConfig() {
@@ -1223,6 +1224,7 @@ async function startPayment() {
     });
     if (!res.ok) throw new Error((await res.json().catch(()=>({}))).error || 'Order failed');
     const order = await res.json();
+    pendingOrderId = order.order_id;
     // Hide our modal so it doesn't cover Razorpay's checkout overlay
     modal.style.display = 'none';
     const rzp = new Razorpay({
@@ -1230,6 +1232,7 @@ async function startPayment() {
       name: 'AI Peer Review System', description: 'Peer Review PDF Download',
       order_id: order.order_id,
       handler: async (response) => {
+        pendingOrderId = null;
         const v = await fetch('/payment/verify', {
           method:'POST', headers:{'Content-Type':'application/json'},
           body: JSON.stringify({...response, review_id: currentReviewId}),
@@ -1240,9 +1243,8 @@ async function startPayment() {
       },
       theme: { color: '#00c9b1' },
       modal: { ondismiss: () => {
-        // User closed Razorpay popup — re-show our modal
-        modal.style.display = 'flex';
-        btn.disabled = false; btn.textContent = '🔒 Pay ₹50 & Download';
+        // User closed Razorpay popup or returned from UPI app — show fallback
+        showPaymentFallback(modal, btn);
       }},
     });
     rzp.open();
@@ -1256,6 +1258,64 @@ function downloadFromCloud() {
   const btn = document.getElementById('cloudBtn');
   if (btn._gcsUrl) window.open(btn._gcsUrl, '_blank');
 }
+
+// ── PAYMENT STATUS FALLBACK (mobile UPI / GPay) ──────────────────────────
+function showPaymentFallback(modal, btn) {
+  modal.style.display = 'flex';
+  if (pendingOrderId) {
+    // Payment may have completed in GPay but callback was lost —
+    // show a "Check Payment Status" button alongside the retry option.
+    btn.disabled = false; btn.textContent = '🔒 Pay ₹50 & Download';
+    let checkBtn = document.getElementById('checkPaymentBtn');
+    if (!checkBtn) {
+      checkBtn = document.createElement('button');
+      checkBtn.id = 'checkPaymentBtn';
+      checkBtn.className = 'action-btn action-btn-primary';
+      checkBtn.style.marginTop = '0.5rem';
+      checkBtn.textContent = 'Already paid? Check Payment Status';
+      checkBtn.onclick = checkPaymentStatus;
+      btn.parentElement.insertBefore(checkBtn, btn.nextSibling);
+    }
+    checkBtn.style.display = '';
+  } else {
+    btn.disabled = false; btn.textContent = '🔒 Pay ₹50 & Download';
+  }
+}
+
+async function checkPaymentStatus() {
+  const checkBtn = document.getElementById('checkPaymentBtn');
+  if (!pendingOrderId || !currentReviewId) return;
+  checkBtn.disabled = true; checkBtn.textContent = 'Checking…';
+  try {
+    const res = await fetch('/payment/check-order', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ order_id: pendingOrderId, review_id: currentReviewId }),
+    });
+    const data = await res.json();
+    if (data.paid) {
+      pendingOrderId = null;
+      document.getElementById('paymentModal').style.display = 'none';
+      if (checkBtn) checkBtn.style.display = 'none';
+      doDownload();
+    } else {
+      checkBtn.textContent = 'Payment not found yet — try again in a moment';
+      checkBtn.disabled = false;
+      setTimeout(() => { checkBtn.textContent = 'Already paid? Check Payment Status'; }, 3000);
+    }
+  } catch (e) {
+    checkBtn.textContent = 'Check failed — tap to retry';
+    checkBtn.disabled = false;
+  }
+}
+
+// Re-check payment status when user returns to the tab (e.g. back from GPay app)
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && pendingOrderId && currentReviewId) {
+    const modal = document.getElementById('paymentModal');
+    const btn = document.getElementById('payBtn');
+    showPaymentFallback(modal, btn);
+  }
+});
 
 // ── MISC UTILITIES ────────────────────────────────────────────────────────
 function esc(s) {

@@ -409,6 +409,93 @@ class TestPaymentVerify(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# /payment/check-order (mobile UPI/GPay fallback)
+# ---------------------------------------------------------------------------
+
+class TestPaymentCheckOrder(unittest.TestCase):
+
+    def setUp(self):
+        app.config["TESTING"] = True
+        self.client = app.test_client()
+        _review_store[DUMMY_REVIEW_ID] = dict(DUMMY_REVIEW)
+
+    def tearDown(self):
+        _review_store.pop(DUMMY_REVIEW_ID, None)
+
+    def test_check_order_disabled_returns_503(self):
+        import app as app_module
+        with patch.object(app_module, "PAYMENT_ENABLED", False):
+            resp = self.client.post(
+                "/payment/check-order",
+                data=json.dumps({"order_id": "order_abc", "review_id": DUMMY_REVIEW_ID}),
+                content_type="application/json",
+            )
+        self.assertEqual(resp.status_code, 503)
+
+    def test_check_order_missing_fields_returns_400(self):
+        import app as app_module
+        with patch.object(app_module, "PAYMENT_ENABLED", True):
+            resp = self.client.post(
+                "/payment/check-order",
+                data=json.dumps({}),
+                content_type="application/json",
+            )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_check_order_captured_payment_marks_review_paid(self):
+        """When Razorpay returns a captured payment, mark review as paid."""
+        from unittest.mock import MagicMock
+        fake_body = json.dumps({
+            "items": [{"id": "pay_TestCapture", "status": "captured"}],
+            "count": 1,
+        }).encode()
+        fake_resp = MagicMock()
+        fake_resp.read.return_value = fake_body
+        fake_resp.__enter__ = lambda s: s
+        fake_resp.__exit__ = lambda *a: False
+
+        import app as app_module
+        with patch.object(app_module, "PAYMENT_ENABLED", True), \
+             patch.object(app_module, "RAZORPAY_KEY_ID", TEST_KEY_ID), \
+             patch.object(app_module, "RAZORPAY_KEY_SECRET", TEST_KEY_SECRET), \
+             patch("urllib.request.urlopen", return_value=fake_resp):
+            resp = self.client.post(
+                "/payment/check-order",
+                data=json.dumps({"order_id": "order_abc", "review_id": DUMMY_REVIEW_ID}),
+                content_type="application/json",
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        data = json.loads(resp.data)
+        self.assertTrue(data["paid"])
+        self.assertTrue(_review_store[DUMMY_REVIEW_ID].get("payment_verified"))
+
+    def test_check_order_no_captured_payment_returns_not_paid(self):
+        """When Razorpay returns no captured payments, paid should be false."""
+        from unittest.mock import MagicMock
+        fake_body = json.dumps({"items": [], "count": 0}).encode()
+        fake_resp = MagicMock()
+        fake_resp.read.return_value = fake_body
+        fake_resp.__enter__ = lambda s: s
+        fake_resp.__exit__ = lambda *a: False
+
+        import app as app_module
+        with patch.object(app_module, "PAYMENT_ENABLED", True), \
+             patch.object(app_module, "RAZORPAY_KEY_ID", TEST_KEY_ID), \
+             patch.object(app_module, "RAZORPAY_KEY_SECRET", TEST_KEY_SECRET), \
+             patch("urllib.request.urlopen", return_value=fake_resp):
+            resp = self.client.post(
+                "/payment/check-order",
+                data=json.dumps({"order_id": "order_abc", "review_id": DUMMY_REVIEW_ID}),
+                content_type="application/json",
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        data = json.loads(resp.data)
+        self.assertFalse(data["paid"])
+
+
+# ---------------------------------------------------------------------------
 # /payment/test
 # ---------------------------------------------------------------------------
 

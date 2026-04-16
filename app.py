@@ -525,6 +525,66 @@ def payment_verify():
     return jsonify({"verified": True, "review_id": review_id})
 
 
+@app.route("/payment/check-order", methods=["POST"])
+def payment_check_order():
+    """
+    Server-side fallback for mobile UPI/GPay where the Razorpay Checkout
+    callback may not fire (Android intent kills browser context).
+
+    Queries Razorpay's Orders API to check whether any payment was captured
+    for the given order.  If yes, marks the review as paid just like
+    /payment/verify would.
+
+    JSON body: {"order_id": "order_...", "review_id": "..."}
+    Returns:   {"paid": true/false, "review_id": "..."}
+    """
+    if not PAYMENT_ENABLED:
+        return jsonify({"error": "Payment gateway not configured."}), 503
+
+    data = request.get_json(silent=True) or {}
+    order_id  = data.get("order_id", "")
+    review_id = data.get("review_id", "")
+
+    if not order_id or not review_id:
+        return jsonify({"error": "Missing order_id or review_id."}), 400
+
+    if review_id not in _review_store:
+        return jsonify({"error": "Invalid or expired review ID."}), 400
+
+    # Query Razorpay for payments against this order
+    try:
+        auth_header = "Basic " + base64.b64encode(
+            f"{RAZORPAY_KEY_ID}:{RAZORPAY_KEY_SECRET}".encode()
+        ).decode()
+        url = f"https://api.razorpay.com/v1/orders/{order_id}/payments"
+        req = urllib.request.Request(
+            url,
+            headers={
+                "Authorization": auth_header,
+                "User-Agent": "healthcarethesisreview/1.0",
+            },
+            method="GET",
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            payments = json.loads(resp.read().decode("utf-8"))
+    except Exception as e:
+        logger.exception("Failed to query Razorpay order payments")
+        return jsonify({"error": f"Could not check order status: {e}"}), 500
+
+    # Razorpay returns {"items": [...], "count": N}
+    items = payments.get("items", [])
+    captured = [p for p in items if p.get("status") == "captured"]
+
+    if captured:
+        payment_id = captured[0]["id"]
+        _review_store[review_id]["payment_verified"] = True
+        _review_store[review_id]["payment_id"] = payment_id
+        logger.info(f"Payment confirmed via check-order for review {review_id}, payment {payment_id}")
+        return jsonify({"paid": True, "review_id": review_id})
+
+    return jsonify({"paid": False, "review_id": review_id})
+
+
 # ---------------------------------------------------------------------------
 # Test payment page (sandbox only — for manual QA)
 # ---------------------------------------------------------------------------
