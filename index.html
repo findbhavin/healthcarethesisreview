@@ -746,8 +746,7 @@ let razorpayLoaded   = false;
 let fullReviewText   = '';
 let stepTimers       = [];
 let pendingOrderId   = null;  // tracks order awaiting payment (mobile UPI fallback)
-let verifiedEmail    = null;  // email verified via OTP for this session
-let verifiedEmail    = null;  // email confirmed via OTP for current review
+let verifiedEmail    = null;
 
 // ── EMAIL COLLECTION FLOW ─────────────────────────────────────────────────
 function showEmailModal() {
