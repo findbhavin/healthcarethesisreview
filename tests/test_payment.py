@@ -719,7 +719,56 @@ class TestPaymentTestPage(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# /invoice/<review_id>
+# Invoice generator (unit tests)
+# ---------------------------------------------------------------------------
+
+class TestInvoiceGenerator(unittest.TestCase):
+
+    def test_generate_invoice_returns_valid_pdf_bytes(self):
+        from invoice_generator import generate_invoice
+        pdf = generate_invoice(
+            invoice_number="HCER-20260420-0001",
+            payment_id=DUMMY_PAYMENT_ID,
+            order_id=DUMMY_ORDER_ID,
+            amount_paise=5_000,
+            currency="INR",
+            customer_email="test@example.com",
+            manuscript_title="Test Manuscript Title",
+        )
+        self.assertIsInstance(pdf, bytes)
+        self.assertTrue(pdf.startswith(b"%PDF"), "Should be a valid PDF")
+        self.assertGreater(len(pdf), 500)
+
+    def test_generate_invoice_with_dict_call_pattern(self):
+        """Remote's call pattern: generate_invoice(review_id, invoice_data)."""
+        from invoice_generator import generate_invoice
+        pdf = generate_invoice("test-review-123", {
+            "invoice_id": "INV-test-pay123",
+            "payment_id": DUMMY_PAYMENT_ID,
+            "order_id": DUMMY_ORDER_ID,
+            "amount_paise": 5_000,
+            "currency": "INR",
+        })
+        self.assertIsInstance(pdf, bytes)
+        self.assertTrue(pdf.startswith(b"%PDF"))
+
+    def test_generate_invoice_with_different_currency(self):
+        from invoice_generator import generate_invoice
+        pdf = generate_invoice(
+            invoice_number="HCER-20260420-9999",
+            payment_id=DUMMY_PAYMENT_ID,
+            order_id=DUMMY_ORDER_ID,
+            amount_paise=5_000,
+            currency="USD",
+            customer_email="buyer@example.com",
+            manuscript_title="Another Test",
+        )
+        self.assertIsInstance(pdf, bytes)
+        self.assertTrue(pdf.startswith(b"%PDF"))
+
+
+# ---------------------------------------------------------------------------
+# GET /invoice/<review_id>
 # ---------------------------------------------------------------------------
 
 class TestInvoiceDownload(unittest.TestCase):
@@ -756,6 +805,80 @@ class TestInvoiceDownload(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.mimetype, "application/pdf")
         self.assertTrue(resp.data.startswith(b"%PDF"))
+
+
+# ---------------------------------------------------------------------------
+# POST /payment/send-invoice
+# ---------------------------------------------------------------------------
+
+class TestSendInvoice(unittest.TestCase):
+
+    def setUp(self):
+        app.config["TESTING"] = True
+        self.client = app.test_client()
+        _review_store[DUMMY_REVIEW_ID] = dict(DUMMY_REVIEW)
+
+    def tearDown(self):
+        _review_store.pop(DUMMY_REVIEW_ID, None)
+
+    def test_send_invoice_disabled_returns_503(self):
+        import app as app_module
+        with patch.object(app_module, "EMAIL_ENABLED", False):
+            resp = self.client.post(
+                "/payment/send-invoice",
+                data=json.dumps({
+                    "review_id": DUMMY_REVIEW_ID, "email": "test@example.com",
+                    "payment_id": DUMMY_PAYMENT_ID, "order_id": DUMMY_ORDER_ID,
+                }),
+                content_type="application/json",
+            )
+        self.assertEqual(resp.status_code, 503)
+
+    def test_send_invoice_missing_fields_returns_400(self):
+        import app as app_module
+        with patch.object(app_module, "EMAIL_ENABLED", True):
+            resp = self.client.post(
+                "/payment/send-invoice",
+                data=json.dumps({"review_id": DUMMY_REVIEW_ID}),
+                content_type="application/json",
+            )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_send_invoice_unknown_review_returns_404(self):
+        import app as app_module
+        with patch.object(app_module, "EMAIL_ENABLED", True):
+            resp = self.client.post(
+                "/payment/send-invoice",
+                data=json.dumps({
+                    "review_id": "nonexistent", "email": "test@example.com",
+                    "payment_id": DUMMY_PAYMENT_ID, "order_id": DUMMY_ORDER_ID,
+                }),
+                content_type="application/json",
+            )
+        self.assertEqual(resp.status_code, 404)
+
+    def test_send_invoice_valid_sends_email_with_pdf_attachment(self):
+        import app as app_module
+        fake_invoice = b"%PDF fake invoice"
+        with patch.object(app_module, "EMAIL_ENABLED", True), \
+             patch.object(app_module, "generate_invoice", return_value=fake_invoice), \
+             patch.object(app_module, "_send_email") as mock_send:
+            resp = self.client.post(
+                "/payment/send-invoice",
+                data=json.dumps({
+                    "review_id": DUMMY_REVIEW_ID, "email": "test@example.com",
+                    "payment_id": DUMMY_PAYMENT_ID, "order_id": DUMMY_ORDER_ID,
+                }),
+                content_type="application/json",
+            )
+        self.assertEqual(resp.status_code, 200)
+        data = json.loads(resp.data)
+        self.assertTrue(data["sent"])
+        self.assertIn("invoice_number", data)
+        self.assertTrue(data["invoice_number"].startswith("HCER-"))
+        mock_send.assert_called_once()
+        args = mock_send.call_args
+        self.assertEqual(args[0][3], fake_invoice)
 
 
 if __name__ == "__main__":

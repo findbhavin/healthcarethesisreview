@@ -815,9 +815,112 @@ def payment_check_order():
         _review_store[review_id]["payment_verified"] = True
         _review_store[review_id]["payment_id"] = payment_id
         logger.info(f"Payment confirmed via check-order for review {review_id}, payment {payment_id}")
-        return jsonify({"paid": True, "review_id": review_id})
+        return jsonify({"paid": True, "review_id": review_id, "payment_id": payment_id})
 
     return jsonify({"paid": False, "review_id": review_id})
+
+
+# ---------------------------------------------------------------------------
+# Invoice generation & delivery
+# ---------------------------------------------------------------------------
+
+_invoice_counter = 0
+
+@app.route("/payment/send-invoice", methods=["POST"])
+def payment_send_invoice():
+    """
+    Generate a PDF invoice for a verified payment and email it to the user.
+
+    JSON body: {"review_id": "...", "email": "...", "payment_id": "...", "order_id": "..."}
+    """
+    if not EMAIL_ENABLED:
+        return jsonify({"error": "Email delivery not configured."}), 503
+
+    data       = request.get_json(silent=True) or {}
+    review_id  = data.get("review_id", "")
+    email      = (data.get("email") or "").strip().lower()
+    payment_id = data.get("payment_id", "")
+    order_id   = data.get("order_id", "")
+
+    if not all([review_id, email, payment_id, order_id]):
+        return jsonify({"error": "Missing required fields."}), 400
+    if not _EMAIL_RE.match(email):
+        return jsonify({"error": "Invalid email address."}), 400
+
+    result = _review_store.get(review_id)
+    if not result:
+        return jsonify({"error": "Review not found."}), 404
+
+    global _invoice_counter
+    _invoice_counter += 1
+    now = datetime.datetime.utcnow()
+    invoice_number = f"HCER-{now.strftime('%Y%m%d')}-{_invoice_counter:04d}"
+
+    try:
+        pdf_bytes = generate_invoice(
+            invoice_number=invoice_number,
+            payment_id=payment_id,
+            order_id=order_id,
+            amount_paise=PAYMENT_AMOUNT_PAISE,
+            currency=PAYMENT_CURRENCY,
+            customer_email=email,
+            manuscript_title=result.get("manuscript_title", "Manuscript Review"),
+            payment_date=now,
+        )
+        html_body = f"""<!DOCTYPE html>
+<html>
+<body style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;color:#333;padding:0">
+  <div style="background:#0f1117;padding:24px;border-radius:8px 8px 0 0">
+    <h1 style="color:#00c9b1;margin:0;font-size:1.4rem">Health Care Expert Reviews</h1>
+  </div>
+  <div style="padding:28px;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 8px 8px">
+    <p>Dear Researcher,</p>
+    <p>Thank you for your payment. Please find your <strong>invoice attached</strong> to this email.</p>
+    <table style="width:100%;border-collapse:collapse;margin:20px 0;font-size:0.9rem">
+      <tr style="background:#f7f7f7">
+        <td style="padding:10px 14px;font-weight:bold;width:38%;border:1px solid #e8e8e8">Invoice No.</td>
+        <td style="padding:10px 14px;border:1px solid #e8e8e8">{invoice_number}</td>
+      </tr>
+      <tr>
+        <td style="padding:10px 14px;font-weight:bold;border:1px solid #e8e8e8">Amount Paid</td>
+        <td style="padding:10px 14px;border:1px solid #e8e8e8"><strong>₹{PAYMENT_AMOUNT_PAISE / 100:.2f}</strong></td>
+      </tr>
+      <tr style="background:#f7f7f7">
+        <td style="padding:10px 14px;font-weight:bold;border:1px solid #e8e8e8">Payment ID</td>
+        <td style="padding:10px 14px;border:1px solid #e8e8e8"><code>{payment_id}</code></td>
+      </tr>
+      <tr>
+        <td style="padding:10px 14px;font-weight:bold;border:1px solid #e8e8e8">Manuscript</td>
+        <td style="padding:10px 14px;border:1px solid #e8e8e8">{result.get('manuscript_title', 'N/A')[:80]}</td>
+      </tr>
+    </table>
+
+    <div style="background:#f0fffe;border:2px solid #00c9b1;border-radius:10px;padding:22px;margin-top:24px">
+      <h3 style="color:#00875f;margin-top:0;font-size:1.05rem">🚀 Coming Soon: Document Revision Service</h3>
+      <p style="margin-bottom:0">We are launching a <strong>personalised document revision service</strong> where our experts will help you strengthen your manuscript. <strong>Stay tuned!</strong></p>
+    </div>
+
+    <hr style="border:none;border-top:1px solid #ebebeb;margin:28px 0">
+    <p style="color:#aaa;font-size:0.8rem;margin:0">
+      This is an automatically generated invoice from Health Care Expert Reviews. Reply to this email for any queries.
+    </p>
+  </div>
+</body>
+</html>"""
+
+        _send_email(
+            email,
+            f"Payment Invoice #{invoice_number} — Health Care Expert Reviews",
+            html_body,
+            pdf_bytes,
+            f"Invoice_{invoice_number}.pdf",
+        )
+        logger.info(f"Invoice {invoice_number} emailed to {email} for payment {payment_id}")
+        return jsonify({"sent": True, "invoice_number": invoice_number})
+
+    except Exception as e:
+        logger.exception("Failed to generate/send invoice")
+        return jsonify({"error": f"Invoice generation failed: {e}"}), 500
 
 
 # ---------------------------------------------------------------------------

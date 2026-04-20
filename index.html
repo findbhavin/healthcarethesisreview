@@ -1381,6 +1381,17 @@ function skipPaymentAndDownload() {
   document.getElementById('paymentModal').style.display = 'none';
   doDownload();
 }
+function sendInvoice(paymentId, orderId) {
+  if (!verifiedEmail || !currentReviewId) return;
+  fetch('/payment/send-invoice', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      review_id: currentReviewId, email: verifiedEmail,
+      payment_id: paymentId, order_id: orderId,
+    }),
+  }).catch(() => {});
+}
+
 async function startPayment() {
   if (!paymentConfig || !paymentConfig.enabled) { skipPaymentAndDownload(); return; }
   const btn = document.getElementById('payBtn');
@@ -1412,6 +1423,7 @@ async function startPayment() {
         const vd = await v.json();
         document.getElementById('paymentModal').style.display = 'none';
         if (vd.verified) {
+          sendInvoice(response.razorpay_payment_id, response.razorpay_order_id);
           doDownload();
           setTimeout(() => doInvoiceDownload(), 800);
         }
@@ -1469,10 +1481,13 @@ async function checkPaymentStatus() {
     });
     const data = await res.json();
     if (data.paid) {
+      const paidOrderId = pendingOrderId;
       pendingOrderId = null;
       document.getElementById('paymentModal').style.display = 'none';
       if (checkBtn) checkBtn.style.display = 'none';
+      if (data.payment_id) sendInvoice(data.payment_id, paidOrderId);
       doDownload();
+      setTimeout(() => doInvoiceDownload(), 800);
     } else {
       checkBtn.textContent = 'Payment not found yet — try again in a moment';
       checkBtn.disabled = false;
