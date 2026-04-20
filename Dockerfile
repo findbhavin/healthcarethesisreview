@@ -18,6 +18,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app.py .
 COPY review_agent.py .
 COPY report_generator.py .
+COPY invoice_generator.py .
 COPY gcs_uploader.py .
 COPY index.html .
 COPY guidelines.html .
