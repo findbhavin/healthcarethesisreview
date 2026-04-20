@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>MedScript Reviewer — AI Peer Review System</title>
+<title>Health Care Expert Reviews — AI Peer Review System</title>
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Instrument+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -448,7 +448,6 @@ body {
 .modal-step.active { border-color:var(--teal); color:var(--teal); }
 .modal-step.done   { background:var(--teal); border-color:var(--teal); color:#0f1117; }
 
-/* Payment modal */
 .modal-backdrop {
   position: fixed; inset: 0; background: rgba(0,0,0,0.7);
   display: flex; align-items: center; justify-content: center;
@@ -747,6 +746,7 @@ let razorpayLoaded   = false;
 let fullReviewText   = '';
 let stepTimers       = [];
 let pendingOrderId   = null;  // tracks order awaiting payment (mobile UPI fallback)
+let verifiedEmail    = null;  // email verified via OTP for this session
 let verifiedEmail    = null;  // email confirmed via OTP for current review
 
 // ── EMAIL COLLECTION FLOW ─────────────────────────────────────────────────
@@ -1410,7 +1410,7 @@ async function startPayment() {
     modal.style.display = 'none';
     const rzp = new Razorpay({
       key: order.key_id, amount: order.amount, currency: order.currency,
-      name: 'AI Peer Review System', description: 'Peer Review PDF Download',
+      name: 'Health Care Expert Reviews', description: 'Peer Review PDF Download',
       order_id: order.order_id,
       handler: async (response) => {
         pendingOrderId = null;
