@@ -536,6 +536,34 @@
     </div>
 
     <div class="settings-section">
+      <h3>AI Provider & Model</h3>
+      <p style="color:#7a8aa8; font-size:13px; margin-bottom:16px;">
+        Configure Anthropic or Gemini usage for manuscript reviews and AI-assisted guideline updates.
+      </p>
+      <div class="field">
+        <label for="aiProvider">Provider</label>
+        <select id="aiProvider">
+          <option value="gemini">Gemini</option>
+          <option value="anthropic">Anthropic</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="aiModel">Model</label>
+        <input type="text" id="aiModel" autocomplete="off" placeholder="gemini-2.5-pro">
+      </div>
+      <div class="field">
+        <label for="geminiApiKey">Gemini API Key (optional override)</label>
+        <input type="password" id="geminiApiKey" autocomplete="off" placeholder="AIza...">
+      </div>
+      <div class="field">
+        <label for="anthropicApiKey">Anthropic API Key (optional override)</label>
+        <input type="password" id="anthropicApiKey" autocomplete="off" placeholder="sk-ant-...">
+      </div>
+      <div id="aiConfigStatus" class="status-bar" style="margin-bottom:14px;"></div>
+      <button class="btn btn-primary" onclick="saveAiConfig()">Save AI Settings</button>
+    </div>
+
+    <div class="settings-section">
       <h3>Hot-Reload Guidelines</h3>
       <p style="color:#7a8aa8; font-size:13px; margin-bottom:16px;">
         Force the application to re-read the YAML from disk without restarting.
@@ -621,6 +649,7 @@ function showAdmin(username) {
   document.getElementById('adminScreen').style.display = 'flex';
   document.getElementById('topbarUser').textContent = '👤 ' + username;
   loadYaml();
+  loadAiConfig();
 }
 
 // Auto-check auth on page load
@@ -762,6 +791,59 @@ async function changeCredentials() {
     }
   } catch(e) {
     setStatus('credStatus', 'Request failed: ' + e.message, 'err');
+  }
+}
+
+async function loadAiConfig() {
+  try {
+    const r = await fetch('/admin/ai-config');
+    if (r.status === 401) { doLogout(); return; }
+    const d = await r.json();
+    document.getElementById('aiProvider').value = d.provider || 'gemini';
+    document.getElementById('aiModel').value = d.model || '';
+    document.getElementById('geminiApiKey').value = '';
+    document.getElementById('anthropicApiKey').value = '';
+    setStatus(
+      'aiConfigStatus',
+      `Current: ${d.provider || 'gemini'} / ${d.model || 'default'} | Keys: Gemini=${d.has_gemini_api_key ? 'set' : 'not set'}, Anthropic=${d.has_anthropic_api_key ? 'set' : 'not set'}`,
+      'info'
+    );
+  } catch (e) {
+    setStatus('aiConfigStatus', 'Failed to load AI settings: ' + e.message, 'err');
+  }
+}
+
+async function saveAiConfig() {
+  const payload = {
+    provider: document.getElementById('aiProvider').value,
+    model: document.getElementById('aiModel').value.trim(),
+    gemini_api_key: document.getElementById('geminiApiKey').value.trim(),
+    anthropic_api_key: document.getElementById('anthropicApiKey').value.trim(),
+  };
+  setStatus('aiConfigStatus', 'Saving AI settings…', 'info');
+
+  try {
+    const r = await fetch('/admin/ai-config', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+    if (r.status === 401) { doLogout(); return; }
+    const d = await r.json();
+    if (d.updated) {
+      setStatus(
+        'aiConfigStatus',
+        `✓ Saved. Active: ${d.provider}/${d.model}. Keys: Gemini=${d.has_gemini_api_key ? 'set' : 'not set'}, Anthropic=${d.has_anthropic_api_key ? 'set' : 'not set'}`,
+        'ok'
+      );
+      document.getElementById('geminiApiKey').value = '';
+      document.getElementById('anthropicApiKey').value = '';
+      toast('AI settings saved!');
+    } else {
+      setStatus('aiConfigStatus', '✗ ' + (d.error || 'Save failed.'), 'err');
+    }
+  } catch (e) {
+    setStatus('aiConfigStatus', 'Request failed: ' + e.message, 'err');
   }
 }
 

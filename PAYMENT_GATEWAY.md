@@ -97,7 +97,7 @@ Browser                          Flask Server                    Razorpay API
 
    If `hmac.compare_digest(expected, signature)` passes, the review is marked `payment_verified = True` in the in-memory store. **No Razorpay API call is made in this step** — verification is purely local using the shared secret.
 
-6. **Download** — Once verified (or if the user chooses "Skip & download free"), the browser fetches `GET /download/<review_id>` which streams the PDF.
+6. **Download + Invoice** — Once verified, the browser fetches `GET /download/<review_id>` for the report and `GET /invoice/<review_id>` for a separate invoice PDF attachment. If the user chooses "Skip & download free", only the report is downloaded.
 
 ---
 

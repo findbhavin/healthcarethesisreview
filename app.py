@@ -10,6 +10,7 @@ GET  /guidelines-page           Serve the Guidelines page (guidelines.html)
 GET  /health                    Health check (used by Cloud Run)
 POST /review                    Stream 8-stage AI peer review via SSE (text/event-stream)
 GET  /download/<review_id>      Download the PDF review report
+GET  /invoice/<review_id>       Download the payment invoice PDF (paid reviews)
 POST /payment/create-order      Create a Razorpay payment order (₹100 per document)
 POST /payment/verify            Verify Razorpay payment signature and mark review as paid
 GET  /guidelines/full           Return complete guidelines data (for UI)
@@ -21,7 +22,10 @@ POST /admin/reload-guidelines   Hot-reload guidelines without restart
 
 Environment variables
 ---------------------
-ANTHROPIC_API_KEY      : required — Anthropic API key
+AI_PROVIDER            : optional — default provider ("gemini" or "anthropic")
+AI_MODEL               : optional — default model name for selected provider
+GEMINI_API_KEY         : optional — Gemini API key (required when provider=gemini)
+ANTHROPIC_API_KEY      : optional — Anthropic API key (required when provider=anthropic)
 GCS_BUCKET             : optional — GCS bucket name for persistent PDF storage
 RAZORPAY_KEY_ID        : optional — Razorpay API key (enables payment)
 RAZORPAY_KEY_SECRET    : optional — Razorpay API secret (enables payment)
@@ -32,6 +36,7 @@ import uuid
 import json
 import logging
 import io
+import datetime
 import hmac
 import hashlib
 import secrets
@@ -39,8 +44,9 @@ from functools import wraps
 
 from flask import Flask, request, jsonify, send_file, Response, stream_with_context, session
 
-from review_agent import run_review, extract_text, stream_review
+from review_agent import run_review, extract_text, stream_review, generate_text
 from report_generator import generate_report
+from invoice_generator import generate_invoice
 from gcs_uploader import (
     upload_report,
     push_rule_version,
@@ -73,15 +79,48 @@ _ADMIN_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "admin_config.json"
 
 
 def _load_admin_config() -> dict:
+    default_config = {
+        "username": "admin",
+        "password": "prakash",
+        "ai": {
+            "provider": "gemini",
+            "model": "gemini-2.5-pro",
+            "gemini_api_key": "",
+            "anthropic_api_key": "",
+        },
+    }
     if os.path.exists(_ADMIN_CONFIG_PATH):
         with open(_ADMIN_CONFIG_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {"username": "admin", "password": "prakash"}
+            loaded = json.load(f)
+        loaded.setdefault("username", default_config["username"])
+        loaded.setdefault("password", default_config["password"])
+        loaded.setdefault("ai", {})
+        loaded["ai"].setdefault("provider", default_config["ai"]["provider"])
+        loaded["ai"].setdefault("model", default_config["ai"]["model"])
+        loaded["ai"].setdefault("gemini_api_key", "")
+        loaded["ai"].setdefault("anthropic_api_key", "")
+        return loaded
+    return default_config
 
 
 def _save_admin_config(config: dict) -> None:
     with open(_ADMIN_CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
+
+
+def _resolve_ai_config() -> dict:
+    cfg = _load_admin_config().get("ai", {})
+    provider = (cfg.get("provider") or os.environ.get("AI_PROVIDER") or "gemini").strip().lower()
+    model = (cfg.get("model") or os.environ.get("AI_MODEL") or "").strip()
+    if not model:
+        model = "gemini-2.5-pro" if provider == "gemini" else "claude-sonnet-4-6"
+
+    return {
+        "provider": provider,
+        "model": model,
+        "gemini_api_key": (cfg.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY") or "").strip(),
+        "anthropic_api_key": (cfg.get("anthropic_api_key") or os.environ.get("ANTHROPIC_API_KEY") or "").strip(),
+    }
 
 
 def _admin_required(f):
@@ -196,6 +235,7 @@ def review():
         f"Received '{filename}' ({len(file_bytes):,} bytes) "
         f"journal='{journal_name}' article_type='{article_type}' tier='{journal_tier}'"
     )
+    ai_config = _resolve_ai_config()
 
     # Assign review_id BEFORE the generator so the client can use it
     # to resume/poll if the SSE connection drops mid-stream (e.g. phone lock).
@@ -212,6 +252,7 @@ def review():
             journal_name=journal_name,
             article_type=article_type,
             journal_tier=journal_tier,
+            ai_config=ai_config,
         ):
             if event["type"] == "chunk":
                 # Accumulate text so poll endpoint can return partial progress
@@ -293,6 +334,34 @@ def download_report(review_id: str):
     except Exception as e:
         logger.exception("Failed to generate PDF report")
         return jsonify({"error": f"Report generation failed: {e}"}), 500
+
+
+@app.route("/invoice/<review_id>", methods=["GET"])
+def download_invoice(review_id: str):
+    """Download a standalone invoice PDF for a successfully paid review."""
+    result = _review_store.get(review_id)
+    if not result:
+        return jsonify({"error": "Review not found or expired."}), 404
+
+    if not result.get("payment_verified"):
+        return jsonify({"error": "Invoice is available only after successful payment verification."}), 402
+
+    invoice_data = result.get("invoice")
+    if not invoice_data:
+        return jsonify({"error": "Invoice data not found for this review."}), 404
+
+    try:
+        invoice_bytes = generate_invoice(review_id, invoice_data)
+        invoice_id = invoice_data.get("invoice_id", review_id)
+        return send_file(
+            io.BytesIO(invoice_bytes),
+            mimetype="application/pdf",
+            as_attachment=True,
+            download_name=f"Invoice_{invoice_id}.pdf",
+        )
+    except Exception as e:
+        logger.exception("Failed to generate invoice")
+        return jsonify({"error": f"Invoice generation failed: {e}"}), 500
 
 
 # ---------------------------------------------------------------------------
@@ -436,11 +505,27 @@ def payment_verify():
 
     # Mark review as paid
     if review_id in _review_store:
+        invoice_id = f"INV-{review_id[:8]}-{payment_id[-6:]}"
         _review_store[review_id]["payment_verified"] = True
+        _review_store[review_id]["order_id"] = order_id
         _review_store[review_id]["payment_id"] = payment_id
+        _review_store[review_id]["paid_at_utc"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        _review_store[review_id]["invoice"] = {
+            "invoice_id": invoice_id,
+            "order_id": order_id,
+            "payment_id": payment_id,
+            "amount_paise": PAYMENT_AMOUNT_PAISE,
+            "currency": PAYMENT_CURRENCY,
+            "description": PAYMENT_DESCRIPTION,
+            "paid_at_utc": _review_store[review_id]["paid_at_utc"],
+        }
         logger.info(f"Payment verified for review {review_id}, payment {payment_id}")
 
-    return jsonify({"verified": True, "review_id": review_id})
+    return jsonify({
+        "verified": True,
+        "review_id": review_id,
+        "invoice_download_url": f"/invoice/{review_id}",
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -684,10 +769,60 @@ def admin_change_credentials():
     if len(new_password) < 6:
         return jsonify({"error": "Password must be at least 6 characters."}), 400
 
-    _save_admin_config({"username": new_username, "password": new_password})
+    cfg = _load_admin_config()
+    cfg["username"] = new_username
+    cfg["password"] = new_password
+    _save_admin_config(cfg)
     session["admin_username"] = new_username
     logger.info(f"Admin credentials updated to username '{new_username}'")
     return jsonify({"updated": True, "username": new_username}), 200
+
+
+@app.route("/admin/ai-config", methods=["GET"])
+@_admin_required
+def admin_get_ai_config():
+    """Get current AI provider/model settings (keys are masked)."""
+    cfg = _resolve_ai_config()
+    return jsonify({
+        "provider": cfg["provider"],
+        "model": cfg["model"],
+        "has_gemini_api_key": bool(cfg["gemini_api_key"]),
+        "has_anthropic_api_key": bool(cfg["anthropic_api_key"]),
+    }), 200
+
+
+@app.route("/admin/ai-config", methods=["POST"])
+@_admin_required
+def admin_set_ai_config():
+    """Update AI provider/model/key settings."""
+    data = request.get_json(silent=True) or {}
+    provider = (data.get("provider") or "gemini").strip().lower()
+    model = (data.get("model") or "").strip()
+    gemini_api_key = (data.get("gemini_api_key") or "").strip()
+    anthropic_api_key = (data.get("anthropic_api_key") or "").strip()
+
+    if provider not in ("gemini", "anthropic"):
+        return jsonify({"error": "provider must be 'gemini' or 'anthropic'."}), 400
+    if not model:
+        model = "gemini-2.5-pro" if provider == "gemini" else "claude-sonnet-4-6"
+
+    cfg = _load_admin_config()
+    cfg.setdefault("ai", {})
+    cfg["ai"]["provider"] = provider
+    cfg["ai"]["model"] = model
+    if "gemini_api_key" in data:
+        cfg["ai"]["gemini_api_key"] = gemini_api_key
+    if "anthropic_api_key" in data:
+        cfg["ai"]["anthropic_api_key"] = anthropic_api_key
+    _save_admin_config(cfg)
+
+    return jsonify({
+        "updated": True,
+        "provider": provider,
+        "model": model,
+        "has_gemini_api_key": bool(cfg["ai"].get("gemini_api_key")),
+        "has_anthropic_api_key": bool(cfg["ai"].get("anthropic_api_key")),
+    }), 200
 
 
 # ---------------------------------------------------------------------------
@@ -815,17 +950,10 @@ def admin_guidelines_nlp_update():
     if not nlp_request:
         return jsonify({"error": "No update request provided."}), 400
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        return jsonify({"error": "ANTHROPIC_API_KEY not configured."}), 503
-
     try:
         current_yaml = get_guidelines_raw()
     except Exception as e:
         return jsonify({"error": f"Could not load current guidelines: {e}"}), 500
-
-    import anthropic as _anthropic
-    client = _anthropic.Anthropic(api_key=api_key)
 
     system_prompt = (
         "You are an expert medical journal editor and YAML editor. "
@@ -847,15 +975,9 @@ def admin_guidelines_nlp_update():
     )
 
     try:
-        message = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=8192,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_msg}],
-        )
-        raw_response = message.content[0].text
+        raw_response = generate_text(system_prompt, user_msg, ai_config=_resolve_ai_config())
     except Exception as e:
-        logger.exception("NLP guideline update Claude call failed")
+        logger.exception("NLP guideline update AI call failed")
         return jsonify({"error": f"AI call failed: {e}"}), 500
 
     # Parse <summary> and <yaml> blocks from response

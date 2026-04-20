@@ -288,6 +288,7 @@ class TestPaymentVerify(unittest.TestCase):
         data = json.loads(resp.data)
         self.assertTrue(data["verified"])
         self.assertEqual(data["review_id"], DUMMY_REVIEW_ID)
+        self.assertIn("invoice_download_url", data)
 
     def test_verify_marks_review_as_paid(self):
         """Successful verification should set payment_verified=True in review store."""
@@ -302,6 +303,9 @@ class TestPaymentVerify(unittest.TestCase):
         self.assertTrue(entry.get("payment_verified"),
                         "review store not updated after successful verify")
         self.assertEqual(entry.get("payment_id"), DUMMY_PAYMENT_ID)
+        self.assertEqual(entry.get("order_id"), DUMMY_ORDER_ID)
+        self.assertIn("invoice", entry)
+        self.assertIn("invoice_id", entry["invoice"])
 
     def test_verify_wrong_secret_returns_400(self):
         """Signature computed with a different secret must be rejected."""
@@ -372,6 +376,46 @@ class TestPaymentTestPage(unittest.TestCase):
         resp = self.client.get("/payment/test")
         self.assertIn(b"/payment/create-order", resp.data)
         self.assertIn(b"/payment/verify", resp.data)
+
+
+# ---------------------------------------------------------------------------
+# /invoice/<review_id>
+# ---------------------------------------------------------------------------
+
+class TestInvoiceDownload(unittest.TestCase):
+
+    def setUp(self):
+        app.config["TESTING"] = True
+        self.client = app.test_client()
+        _review_store[DUMMY_REVIEW_ID] = dict(DUMMY_REVIEW)
+
+    def tearDown(self):
+        _review_store.pop(DUMMY_REVIEW_ID, None)
+
+    def test_invoice_requires_paid_review(self):
+        resp = self.client.get(f"/invoice/{DUMMY_REVIEW_ID}")
+        self.assertEqual(resp.status_code, 402)
+
+    def test_invoice_returns_pdf_after_payment(self):
+        sig = _valid_signature(DUMMY_ORDER_ID, DUMMY_PAYMENT_ID, TEST_KEY_SECRET)
+        import app as app_module
+        with patch.object(app_module, "PAYMENT_ENABLED", True), \
+             patch.object(app_module, "RAZORPAY_KEY_SECRET", TEST_KEY_SECRET):
+            self.client.post(
+                "/payment/verify",
+                data=json.dumps({
+                    "razorpay_order_id": DUMMY_ORDER_ID,
+                    "razorpay_payment_id": DUMMY_PAYMENT_ID,
+                    "razorpay_signature": sig,
+                    "review_id": DUMMY_REVIEW_ID,
+                }),
+                content_type="application/json",
+            )
+
+        resp = self.client.get(f"/invoice/{DUMMY_REVIEW_ID}")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.mimetype, "application/pdf")
+        self.assertTrue(resp.data.startswith(b"%PDF"))
 
 
 if __name__ == "__main__":

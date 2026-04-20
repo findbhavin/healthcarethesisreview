@@ -1203,6 +1203,7 @@ function initiateDownload() {
   }
 }
 function doDownload() { window.location.href = '/download/' + currentReviewId; }
+function doInvoiceDownload() { window.location.href = '/invoice/' + currentReviewId; }
 function skipPaymentAndDownload() {
   document.getElementById('paymentModal').style.display = 'none';
   doDownload();
@@ -1229,7 +1230,10 @@ async function startPayment() {
         });
         const vd = await v.json();
         document.getElementById('paymentModal').style.display = 'none';
-        if (vd.verified) doDownload();
+        if (vd.verified) {
+          doDownload();
+          setTimeout(() => doInvoiceDownload(), 800);
+        }
         else alert('Payment verification failed. Please download free.');
       },
       theme: { color: '#00c9b1' },

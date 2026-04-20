@@ -16,6 +16,74 @@ from guidelines.guidelines_loader import build_system_prompt, get_stage_weights,
 
 logger = logging.getLogger(__name__)
 
+_DEFAULT_MODELS = {
+    "gemini": "gemini-2.5-pro",
+    "anthropic": "claude-sonnet-4-6",
+}
+
+
+def _normalize_ai_config(ai_config: dict | None = None) -> dict:
+    config = ai_config or {}
+    provider = (config.get("provider") or os.environ.get("AI_PROVIDER") or "gemini").strip().lower()
+    if provider not in ("gemini", "anthropic"):
+        raise RuntimeError(f"Unsupported AI provider '{provider}'. Use 'gemini' or 'anthropic'.")
+
+    model = (config.get("model") or os.environ.get("AI_MODEL") or _DEFAULT_MODELS[provider]).strip()
+    if not model:
+        model = _DEFAULT_MODELS[provider]
+
+    anthropic_api_key = (config.get("anthropic_api_key") or os.environ.get("ANTHROPIC_API_KEY") or "").strip()
+    gemini_api_key = (config.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY") or "").strip()
+
+    if provider == "anthropic" and not anthropic_api_key:
+        raise RuntimeError("ANTHROPIC_API_KEY is not configured for Anthropic provider.")
+    if provider == "gemini" and not gemini_api_key:
+        raise RuntimeError("GEMINI_API_KEY is not configured for Gemini provider.")
+
+    return {
+        "provider": provider,
+        "model": model,
+        "anthropic_api_key": anthropic_api_key,
+        "gemini_api_key": gemini_api_key,
+    }
+
+
+def generate_text(system_prompt: str, user_message: str, ai_config: dict | None = None) -> str:
+    cfg = _normalize_ai_config(ai_config)
+    provider = cfg["provider"]
+    model = cfg["model"]
+
+    if provider == "anthropic":
+        client = anthropic.Anthropic(api_key=cfg["anthropic_api_key"])
+        message = client.messages.create(
+            model=model,
+            max_tokens=8192,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_message}],
+        )
+        return message.content[0].text
+
+    try:
+        from google import genai as google_genai
+        from google.genai import types as google_types
+    except Exception as exc:
+        raise RuntimeError(
+            "Gemini SDK unavailable. Install 'google-genai' to use Gemini models."
+        ) from exc
+
+    client = google_genai.Client(api_key=cfg["gemini_api_key"])
+    response = client.models.generate_content(
+        model=model,
+        contents=user_message,
+        config=google_types.GenerateContentConfig(
+            system_instruction=system_prompt,
+            max_output_tokens=8192,
+        ),
+    )
+    if not getattr(response, "text", None):
+        raise RuntimeError("Gemini returned an empty response.")
+    return response.text
+
 
 # ---------------------------------------------------------------------------
 # Text Extraction
@@ -156,7 +224,8 @@ def _extract_stage_scores(review_text: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def run_review(file_bytes: bytes, filename: str, journal_name: str = "",
-               article_type: str = "", journal_tier: str = "") -> dict:
+               article_type: str = "", journal_tier: str = "",
+               ai_config: dict | None = None) -> dict:
     """
     Run the AI peer review on an uploaded manuscript file.
 
@@ -207,24 +276,13 @@ def run_review(file_bytes: bytes, filename: str, journal_name: str = "",
         f"--- MANUSCRIPT BEGIN ---\n{manuscript_text}\n--- MANUSCRIPT END ---"
     )
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise RuntimeError(
-            "ANTHROPIC_API_KEY environment variable is not set. "
-            "Set it before starting the application."
-        )
-
-    client = anthropic.Anthropic(api_key=api_key)
-
-    logger.info("Sending manuscript to Claude API for review...")
-    message = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=8192,
-        system=system_prompt,
-        messages=[{"role": "user", "content": user_message}],
+    cfg = _normalize_ai_config(ai_config)
+    logger.info(
+        "Sending manuscript to %s model '%s' for review...",
+        cfg["provider"],
+        cfg["model"],
     )
-
-    review_text = message.content[0].text
+    review_text = generate_text(system_prompt, user_message, ai_config=cfg)
     logger.info("Review completed successfully.")
 
     # Parse decision from report
@@ -262,7 +320,8 @@ def run_review(file_bytes: bytes, filename: str, journal_name: str = "",
 
 
 def stream_review(file_bytes: bytes, filename: str, journal_name: str = "",
-                  article_type: str = "", journal_tier: str = ""):
+                  article_type: str = "", journal_tier: str = "",
+                  ai_config: dict | None = None):
     """
     Streaming version of run_review. Yields dicts for SSE:
       {"type": "chunk", "text": "..."}          — incremental text
@@ -297,24 +356,26 @@ def stream_review(file_bytes: bytes, filename: str, journal_name: str = "",
             f"--- MANUSCRIPT BEGIN ---\n{manuscript_text}\n--- MANUSCRIPT END ---"
         )
 
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
-        if not api_key:
-            yield {"type": "error", "error": "ANTHROPIC_API_KEY is not configured."}
-            return
-
-        client = anthropic.Anthropic(api_key=api_key)
+        cfg = _normalize_ai_config(ai_config)
         full_text_parts = []
 
-        logger.info("[stream] Streaming review from Claude API...")
-        with client.messages.stream(
-            model="claude-sonnet-4-6",
-            max_tokens=8192,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_message}],
-        ) as stream:
-            for text_chunk in stream.text_stream:
-                full_text_parts.append(text_chunk)
-                yield {"type": "chunk", "text": text_chunk}
+        if cfg["provider"] == "anthropic":
+            client = anthropic.Anthropic(api_key=cfg["anthropic_api_key"])
+            logger.info("[stream] Streaming review from Anthropic model '%s'...", cfg["model"])
+            with client.messages.stream(
+                model=cfg["model"],
+                max_tokens=8192,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_message}],
+            ) as stream:
+                for text_chunk in stream.text_stream:
+                    full_text_parts.append(text_chunk)
+                    yield {"type": "chunk", "text": text_chunk}
+        else:
+            logger.info("[stream] Generating review from Gemini model '%s'...", cfg["model"])
+            review_text = generate_text(system_prompt, user_message, ai_config=cfg)
+            full_text_parts.append(review_text)
+            yield {"type": "chunk", "text": review_text}
 
         review_text = "".join(full_text_parts)
         logger.info("[stream] Review stream completed.")
