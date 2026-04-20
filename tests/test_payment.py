@@ -9,16 +9,17 @@ Tests cover:
                                 bad signature → 400, valid HMAC → 200)
   - GET  /payment/test         (sandbox page renders correctly)
 
-No real Razorpay API calls are made — razorpay.Client is mocked.
+No real Razorpay API calls are made — app._create_razorpay_order is mocked.
 """
 
 import hashlib
 import hmac as hmac_lib
+import io
 import json
 import os
 import sys
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -109,11 +110,11 @@ class TestPaymentConfig(unittest.TestCase):
         for field in ("enabled", "key_id", "amount", "currency", "description", "amount_display"):
             self.assertIn(field, data, f"Missing field: {field}")
 
-    def test_config_amount_is_10000_paise(self):
-        """₹100 = 10000 paise."""
+    def test_config_amount_is_5000_paise(self):
+        """₹50 = 5000 paise."""
         resp = self.client.get("/payment/config")
         data = json.loads(resp.data)
-        self.assertEqual(data["amount"], 10_000)
+        self.assertEqual(data["amount"], 5_000)
 
     def test_config_currency_is_inr(self):
         resp = self.client.get("/payment/config")
@@ -170,20 +171,18 @@ class TestPaymentCreateOrder(unittest.TestCase):
         self.assertIn("error", data)
 
     def test_create_order_valid_review_id_returns_order(self):
-        """Mock the razorpay client to return a fake order."""
+        """Mock _create_razorpay_order to return a fake order."""
         mock_order = {
             "id": DUMMY_ORDER_ID,
-            "amount": 10_000,
+            "amount": 5_000,
             "currency": "INR",
         }
-        mock_client = MagicMock()
-        mock_client.order.create.return_value = mock_order
 
         import app as app_module
         with patch.object(app_module, "PAYMENT_ENABLED", True), \
              patch.object(app_module, "RAZORPAY_KEY_ID", TEST_KEY_ID), \
              patch.object(app_module, "RAZORPAY_KEY_SECRET", TEST_KEY_SECRET), \
-             patch("razorpay.Client", return_value=mock_client):
+             patch.object(app_module, "_create_razorpay_order", return_value=mock_order):
             resp = self.client.post(
                 "/payment/create-order",
                 data=json.dumps({"review_id": DUMMY_REVIEW_ID}),
@@ -193,20 +192,21 @@ class TestPaymentCreateOrder(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         data = json.loads(resp.data)
         self.assertEqual(data["order_id"], DUMMY_ORDER_ID)
-        self.assertEqual(data["amount"], 10_000)
+        self.assertEqual(data["amount"], 5_000)
         self.assertEqual(data["currency"], "INR")
         self.assertEqual(data["review_id"], DUMMY_REVIEW_ID)
         self.assertIn("key_id", data)
 
     def test_create_order_razorpay_failure_returns_500(self):
-        """If the razorpay API throws, the endpoint should return 500."""
-        mock_client = MagicMock()
-        mock_client.order.create.side_effect = Exception("Razorpay API unavailable")
-
+        """If the Razorpay REST call throws, the endpoint should return 500."""
         import app as app_module
         with patch.object(app_module, "PAYMENT_ENABLED", True), \
              patch.object(app_module, "RAZORPAY_KEY_SECRET", TEST_KEY_SECRET), \
-             patch("razorpay.Client", return_value=mock_client):
+             patch.object(
+                 app_module,
+                 "_create_razorpay_order",
+                 side_effect=RuntimeError("Razorpay API unavailable"),
+             ):
             resp = self.client.post(
                 "/payment/create-order",
                 data=json.dumps({"review_id": DUMMY_REVIEW_ID}),
@@ -216,6 +216,99 @@ class TestPaymentCreateOrder(unittest.TestCase):
         self.assertEqual(resp.status_code, 500)
         data = json.loads(resp.data)
         self.assertIn("error", data)
+
+
+# ---------------------------------------------------------------------------
+# _create_razorpay_order (direct HTTP helper)
+# ---------------------------------------------------------------------------
+
+class TestCreateRazorpayOrderHelper(unittest.TestCase):
+    """
+    Unit-test the direct-HTTP helper to confirm the REST call is shaped
+    correctly — Basic auth header, JSON body, POST method — before hitting
+    Razorpay's live API.
+    """
+
+    def test_helper_posts_correct_request_and_parses_response(self):
+        import base64 as _b64
+        from unittest.mock import MagicMock
+        import app as app_module
+
+        fake_response_body = json.dumps({
+            "id": "order_HELPERTEST",
+            "amount": 5_000,
+            "currency": "INR",
+            "receipt": "review_abc",
+        }).encode()
+
+        fake_resp = MagicMock()
+        fake_resp.read.return_value = fake_response_body
+        fake_resp.__enter__ = lambda self_: self_
+        fake_resp.__exit__ = lambda *_args: False
+
+        captured = {}
+
+        def fake_urlopen(req, timeout):
+            captured["url"] = req.full_url
+            captured["method"] = req.get_method()
+            captured["headers"] = dict(req.header_items())
+            captured["body"] = req.data
+            captured["timeout"] = timeout
+            return fake_resp
+
+        with patch.object(app_module, "RAZORPAY_KEY_ID", "rzp_test_helperkey"), \
+             patch.object(app_module, "RAZORPAY_KEY_SECRET", "helpersecret"), \
+             patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            result = app_module._create_razorpay_order(
+                amount_paise=5_000,
+                currency="INR",
+                receipt="review_abc",
+                notes={"review_id": "abc"},
+            )
+
+        self.assertEqual(result["id"], "order_HELPERTEST")
+        self.assertEqual(captured["url"], "https://api.razorpay.com/v1/orders")
+        self.assertEqual(captured["method"], "POST")
+
+        # Headers come back title-cased from header_items()
+        lc_headers = {k.lower(): v for k, v in captured["headers"].items()}
+        self.assertEqual(lc_headers["content-type"], "application/json")
+        expected_auth = "Basic " + _b64.b64encode(
+            b"rzp_test_helperkey:helpersecret"
+        ).decode()
+        self.assertEqual(lc_headers["authorization"], expected_auth)
+
+        body = json.loads(captured["body"].decode())
+        self.assertEqual(body["amount"], 5_000)
+        self.assertEqual(body["currency"], "INR")
+        self.assertEqual(body["receipt"], "review_abc")
+        self.assertEqual(body["notes"], {"review_id": "abc"})
+
+    def test_helper_raises_runtime_error_on_http_error(self):
+        import urllib.error
+        import app as app_module
+
+        http_err = urllib.error.HTTPError(
+            url="https://api.razorpay.com/v1/orders",
+            code=400,
+            msg="Bad Request",
+            hdrs=None,
+            fp=io.BytesIO(b'{"error":{"description":"bad amount"}}'),
+        )
+
+        with patch.object(app_module, "RAZORPAY_KEY_ID", "rzp_test_x"), \
+             patch.object(app_module, "RAZORPAY_KEY_SECRET", "s"), \
+             patch("urllib.request.urlopen", side_effect=http_err):
+            with self.assertRaises(RuntimeError) as cm:
+                app_module._create_razorpay_order(
+                    amount_paise=5_000,
+                    currency="INR",
+                    receipt="r",
+                    notes={},
+                )
+
+        self.assertIn("400", str(cm.exception))
+        self.assertIn("bad amount", str(cm.exception))
 
 
 # ---------------------------------------------------------------------------
@@ -317,6 +410,253 @@ class TestPaymentVerify(unittest.TestCase):
             "review_id":           DUMMY_REVIEW_ID,
         }, key_secret=TEST_KEY_SECRET)  # server uses different secret
         self.assertEqual(resp.status_code, 400)
+
+
+# ---------------------------------------------------------------------------
+# /payment/check-order (mobile UPI/GPay fallback)
+# ---------------------------------------------------------------------------
+
+class TestPaymentCheckOrder(unittest.TestCase):
+
+    def setUp(self):
+        app.config["TESTING"] = True
+        self.client = app.test_client()
+        _review_store[DUMMY_REVIEW_ID] = dict(DUMMY_REVIEW)
+
+    def tearDown(self):
+        _review_store.pop(DUMMY_REVIEW_ID, None)
+
+    def test_check_order_disabled_returns_503(self):
+        import app as app_module
+        with patch.object(app_module, "PAYMENT_ENABLED", False):
+            resp = self.client.post(
+                "/payment/check-order",
+                data=json.dumps({"order_id": "order_abc", "review_id": DUMMY_REVIEW_ID}),
+                content_type="application/json",
+            )
+        self.assertEqual(resp.status_code, 503)
+
+    def test_check_order_missing_fields_returns_400(self):
+        import app as app_module
+        with patch.object(app_module, "PAYMENT_ENABLED", True):
+            resp = self.client.post(
+                "/payment/check-order",
+                data=json.dumps({}),
+                content_type="application/json",
+            )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_check_order_captured_payment_marks_review_paid(self):
+        """When Razorpay returns a captured payment, mark review as paid."""
+        from unittest.mock import MagicMock
+        fake_body = json.dumps({
+            "items": [{"id": "pay_TestCapture", "status": "captured"}],
+            "count": 1,
+        }).encode()
+        fake_resp = MagicMock()
+        fake_resp.read.return_value = fake_body
+        fake_resp.__enter__ = lambda s: s
+        fake_resp.__exit__ = lambda *a: False
+
+        import app as app_module
+        with patch.object(app_module, "PAYMENT_ENABLED", True), \
+             patch.object(app_module, "RAZORPAY_KEY_ID", TEST_KEY_ID), \
+             patch.object(app_module, "RAZORPAY_KEY_SECRET", TEST_KEY_SECRET), \
+             patch("urllib.request.urlopen", return_value=fake_resp):
+            resp = self.client.post(
+                "/payment/check-order",
+                data=json.dumps({"order_id": "order_abc", "review_id": DUMMY_REVIEW_ID}),
+                content_type="application/json",
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        data = json.loads(resp.data)
+        self.assertTrue(data["paid"])
+        self.assertTrue(_review_store[DUMMY_REVIEW_ID].get("payment_verified"))
+
+    def test_check_order_no_captured_payment_returns_not_paid(self):
+        """When Razorpay returns no captured payments, paid should be false."""
+        from unittest.mock import MagicMock
+        fake_body = json.dumps({"items": [], "count": 0}).encode()
+        fake_resp = MagicMock()
+        fake_resp.read.return_value = fake_body
+        fake_resp.__enter__ = lambda s: s
+        fake_resp.__exit__ = lambda *a: False
+
+        import app as app_module
+        with patch.object(app_module, "PAYMENT_ENABLED", True), \
+             patch.object(app_module, "RAZORPAY_KEY_ID", TEST_KEY_ID), \
+             patch.object(app_module, "RAZORPAY_KEY_SECRET", TEST_KEY_SECRET), \
+             patch("urllib.request.urlopen", return_value=fake_resp):
+            resp = self.client.post(
+                "/payment/check-order",
+                data=json.dumps({"order_id": "order_abc", "review_id": DUMMY_REVIEW_ID}),
+                content_type="application/json",
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        data = json.loads(resp.data)
+        self.assertFalse(data["paid"])
+
+
+# ---------------------------------------------------------------------------
+# /email/* endpoints
+# ---------------------------------------------------------------------------
+
+class TestEmailEndpoints(unittest.TestCase):
+
+    def setUp(self):
+        app.config["TESTING"] = True
+        self.client = app.test_client()
+        _review_store[DUMMY_REVIEW_ID] = dict(DUMMY_REVIEW)
+
+    def tearDown(self):
+        _review_store.pop(DUMMY_REVIEW_ID, None)
+        import app as app_module
+        app_module._otp_store.clear()
+
+    # /email/send-otp
+    def test_send_otp_disabled_returns_503(self):
+        import app as app_module
+        with patch.object(app_module, "EMAIL_ENABLED", False):
+            resp = self.client.post(
+                "/email/send-otp",
+                data=json.dumps({"email": "test@example.com", "review_id": DUMMY_REVIEW_ID}),
+                content_type="application/json",
+            )
+        self.assertEqual(resp.status_code, 503)
+
+    def test_send_otp_invalid_email_returns_400(self):
+        import app as app_module
+        with patch.object(app_module, "EMAIL_ENABLED", True):
+            resp = self.client.post(
+                "/email/send-otp",
+                data=json.dumps({"email": "notanemail", "review_id": DUMMY_REVIEW_ID}),
+                content_type="application/json",
+            )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_send_otp_unknown_review_returns_400(self):
+        import app as app_module
+        with patch.object(app_module, "EMAIL_ENABLED", True):
+            resp = self.client.post(
+                "/email/send-otp",
+                data=json.dumps({"email": "test@example.com", "review_id": "nonexistent"}),
+                content_type="application/json",
+            )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_send_otp_valid_sends_email_and_returns_sent(self):
+        import app as app_module
+        with patch.object(app_module, "EMAIL_ENABLED", True), \
+             patch.object(app_module, "_send_email") as mock_send:
+            resp = self.client.post(
+                "/email/send-otp",
+                data=json.dumps({"email": "test@example.com", "review_id": DUMMY_REVIEW_ID}),
+                content_type="application/json",
+            )
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(json.loads(resp.data)["sent"])
+        mock_send.assert_called_once()
+        # OTP stored
+        self.assertIn("test@example.com", app_module._otp_store)
+
+    # /email/verify-otp
+    def test_verify_otp_no_otp_stored_returns_400(self):
+        resp = self.client.post(
+            "/email/verify-otp",
+            data=json.dumps({"email": "nobody@example.com", "otp": "123456"}),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_verify_otp_wrong_code_returns_400(self):
+        import app as app_module, datetime
+        app_module._otp_store["test@example.com"] = {
+            "otp": "999999",
+            "expires": datetime.datetime.utcnow() + datetime.timedelta(minutes=10),
+            "attempts": 0,
+            "review_id": DUMMY_REVIEW_ID,
+        }
+        resp = self.client.post(
+            "/email/verify-otp",
+            data=json.dumps({"email": "test@example.com", "otp": "123456"}),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(json.loads(resp.data)["verified"])
+
+    def test_verify_otp_correct_code_marks_review_and_returns_verified(self):
+        import app as app_module, datetime
+        app_module._otp_store["test@example.com"] = {
+            "otp": "123456",
+            "expires": datetime.datetime.utcnow() + datetime.timedelta(minutes=10),
+            "attempts": 0,
+            "review_id": DUMMY_REVIEW_ID,
+        }
+        resp = self.client.post(
+            "/email/verify-otp",
+            data=json.dumps({"email": "test@example.com", "otp": "123456"}),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        data = json.loads(resp.data)
+        self.assertTrue(data["verified"])
+        self.assertEqual(_review_store[DUMMY_REVIEW_ID].get("user_email"), "test@example.com")
+        self.assertNotIn("test@example.com", app_module._otp_store)
+
+    def test_verify_otp_expired_returns_400(self):
+        import app as app_module, datetime
+        app_module._otp_store["test@example.com"] = {
+            "otp": "123456",
+            "expires": datetime.datetime.utcnow() - datetime.timedelta(minutes=1),
+            "attempts": 0,
+            "review_id": DUMMY_REVIEW_ID,
+        }
+        resp = self.client.post(
+            "/email/verify-otp",
+            data=json.dumps({"email": "test@example.com", "otp": "123456"}),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    # /email/send-pdf
+    def test_send_pdf_disabled_returns_503(self):
+        import app as app_module
+        with patch.object(app_module, "EMAIL_ENABLED", False):
+            resp = self.client.post(
+                "/email/send-pdf",
+                data=json.dumps({"review_id": DUMMY_REVIEW_ID, "email": "test@example.com"}),
+                content_type="application/json",
+            )
+        self.assertEqual(resp.status_code, 503)
+
+    def test_send_pdf_unknown_review_returns_404(self):
+        import app as app_module
+        with patch.object(app_module, "EMAIL_ENABLED", True):
+            resp = self.client.post(
+                "/email/send-pdf",
+                data=json.dumps({"review_id": "nonexistent", "email": "test@example.com"}),
+                content_type="application/json",
+            )
+        self.assertEqual(resp.status_code, 404)
+
+    def test_send_pdf_valid_sends_email_with_attachment(self):
+        import app as app_module
+        fake_pdf = b"%PDF fake"
+        with patch.object(app_module, "EMAIL_ENABLED", True), \
+             patch.object(app_module, "generate_report", return_value=fake_pdf), \
+             patch.object(app_module, "_send_email") as mock_send:
+            resp = self.client.post(
+                "/email/send-pdf",
+                data=json.dumps({"review_id": DUMMY_REVIEW_ID, "email": "test@example.com"}),
+                content_type="application/json",
+            )
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(json.loads(resp.data)["sent"])
+        # Verify PDF bytes were passed to _send_email
+        args = mock_send.call_args
+        self.assertEqual(args[0][3], fake_pdf)  # pdf_bytes positional arg
 
 
 # ---------------------------------------------------------------------------

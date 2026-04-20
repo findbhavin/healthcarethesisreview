@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>MedScript Reviewer — AI Peer Review System</title>
+<title>Health Care Expert Reviews — AI Peer Review System</title>
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Instrument+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -427,7 +427,27 @@ body {
 .error-box.visible { display: block; }
 .error-box strong { display: block; margin-bottom: 0.3rem; font-size: 0.9rem; }
 
-/* Payment modal */
+/* Email & Payment modals */
+.modal-input {
+  width: 100%; box-sizing: border-box;
+  background: var(--bg); color: var(--white);
+  border: 1px solid var(--border-bright); border-radius: 8px;
+  padding: 0.75rem 1rem; font-size: 1rem; margin-bottom: 0.75rem;
+  outline: none;
+}
+.modal-input:focus { border-color: var(--teal); }
+.modal-input::placeholder { color: var(--text-muted); }
+.modal-error { color: #ff5c6a; font-size: 0.82rem; margin: -0.4rem 0 0.6rem; min-height: 1.1rem; }
+.modal-hint  { color: var(--text-muted); font-size: 0.82rem; margin-bottom: 0.8rem; }
+.modal-steps { display:flex; justify-content:center; gap:0.5rem; margin-bottom:1.2rem; }
+.modal-step  {
+  width:28px; height:28px; border-radius:50%; border:2px solid var(--border-bright);
+  display:flex; align-items:center; justify-content:center;
+  font-size:0.8rem; font-weight:700; color:var(--text-muted);
+}
+.modal-step.active { border-color:var(--teal); color:var(--teal); }
+.modal-step.done   { background:var(--teal); border-color:var(--teal); color:#0f1117; }
+
 .modal-backdrop {
   position: fixed; inset: 0; background: rgba(0,0,0,0.7);
   display: flex; align-items: center; justify-content: center;
@@ -649,6 +669,52 @@ body {
 </div>
 </div><!-- /container -->
 
+<!-- ── EMAIL COLLECTION MODAL ── -->
+<div class="modal-backdrop" id="emailModal" style="display:none" role="dialog" aria-modal="true">
+  <div class="modal">
+    <!-- Step indicators -->
+    <div class="modal-steps">
+      <div class="modal-step active" id="emailStep1Dot">1</div>
+      <div style="width:28px;height:2px;background:var(--border-bright);align-self:center"></div>
+      <div class="modal-step" id="emailStep2Dot">2</div>
+    </div>
+
+    <!-- Step 1: Enter email -->
+    <div id="emailStep1">
+      <div style="font-size:1.8rem;margin-bottom:0.5rem">📬</div>
+      <h2>Get Your Report by Email</h2>
+      <p>Enter your email and we'll send the full PDF review report directly to your inbox — plus be the first to hear about our upcoming document revision service.</p>
+      <input type="email" id="emailInput" class="modal-input" placeholder="your@email.com" autocomplete="email" />
+      <div class="modal-error" id="emailError"></div>
+      <button class="action-btn action-btn-primary" id="sendOtpBtn" onclick="sendOtp()" style="width:100%;margin-bottom:0.6rem">
+        Send Verification Code
+      </button>
+      <button class="action-btn" onclick="skipEmailAndContinue()" style="width:100%">
+        Skip — Don't email me
+      </button>
+    </div>
+
+    <!-- Step 2: Enter OTP -->
+    <div id="emailStep2" style="display:none">
+      <div style="font-size:1.8rem;margin-bottom:0.5rem">🔑</div>
+      <h2>Enter Verification Code</h2>
+      <p id="otpSentMsg" class="modal-hint">We sent a 6-digit code to <strong id="otpEmailDisplay"></strong></p>
+      <input type="text" id="otpInput" class="modal-input" placeholder="6-digit code"
+             maxlength="6" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" />
+      <div class="modal-error" id="otpError"></div>
+      <button class="action-btn action-btn-primary" id="verifyOtpBtn" onclick="verifyOtp()" style="width:100%;margin-bottom:0.6rem">
+        Verify &amp; Continue
+      </button>
+      <button class="action-btn" onclick="backToEmailStep()" style="width:100%;margin-bottom:0.6rem">
+        ← Change Email
+      </button>
+      <button class="action-btn" onclick="skipEmailAndContinue()" style="width:100%">
+        Skip — Don't email me
+      </button>
+    </div>
+  </div>
+</div>
+
 <!-- ── PAYMENT MODAL ── -->
 <div class="modal-backdrop" id="paymentModal" style="display:none" role="dialog" aria-modal="true">
   <div class="modal">
@@ -656,12 +722,12 @@ body {
     <h2>Support This Service</h2>
     <p>Would you like to make a small contribution to help sustain this peer review service? Paying is entirely optional.</p>
     <div class="price-badge">
-      ₹100
-      <small>~$1.20 USD per document · International cards accepted</small>
+      ₹50
+      <small>~$0.60 USD per document · International cards accepted</small>
     </div>
     <div class="modal-actions">
       <button class="action-btn action-btn-primary" id="payBtn" onclick="startPayment()">
-        🔒 Pay ₹100 &amp; Download
+        🔒 Pay ₹50 &amp; Download
       </button>
       <button class="action-btn" onclick="skipPaymentAndDownload()">
         Download Free
@@ -679,6 +745,104 @@ let paymentConfig    = null;
 let razorpayLoaded   = false;
 let fullReviewText   = '';
 let stepTimers       = [];
+let pendingOrderId   = null;  // tracks order awaiting payment (mobile UPI fallback)
+let verifiedEmail    = null;
+
+// ── EMAIL COLLECTION FLOW ─────────────────────────────────────────────────
+function showEmailModal() {
+  // Reset to step 1
+  document.getElementById('emailStep1').style.display = '';
+  document.getElementById('emailStep2').style.display = 'none';
+  document.getElementById('emailError').textContent = '';
+  document.getElementById('otpError').textContent = '';
+  document.getElementById('emailInput').value = '';
+  document.getElementById('otpInput').value = '';
+  document.getElementById('emailStep1Dot').className = 'modal-step active';
+  document.getElementById('emailStep2Dot').className = 'modal-step';
+  document.getElementById('emailModal').style.display = 'flex';
+}
+
+async function sendOtp() {
+  const emailInput = document.getElementById('emailInput');
+  const email = emailInput.value.trim();
+  const errEl = document.getElementById('emailError');
+  errEl.textContent = '';
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    errEl.textContent = 'Please enter a valid email address.'; return;
+  }
+  const btn = document.getElementById('sendOtpBtn');
+  btn.disabled = true; btn.textContent = 'Sending…';
+  try {
+    const res = await fetch('/email/send-otp', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ email, review_id: currentReviewId }),
+    });
+    const data = await res.json();
+    if (!res.ok) { errEl.textContent = data.error || 'Failed to send code.'; return; }
+    // Move to step 2
+    document.getElementById('otpEmailDisplay').textContent = email;
+    document.getElementById('emailStep1').style.display = 'none';
+    document.getElementById('emailStep2').style.display = '';
+    document.getElementById('emailStep1Dot').className = 'modal-step done';
+    document.getElementById('emailStep2Dot').className = 'modal-step active';
+    document.getElementById('otpInput').focus();
+  } catch (e) {
+    errEl.textContent = 'Network error. Please try again.';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Send Verification Code';
+  }
+}
+
+async function verifyOtp() {
+  const email = document.getElementById('emailInput').value.trim();
+  const otp   = document.getElementById('otpInput').value.trim();
+  const errEl = document.getElementById('otpError');
+  errEl.textContent = '';
+  if (otp.length !== 6) { errEl.textContent = 'Enter the 6-digit code.'; return; }
+  const btn = document.getElementById('verifyOtpBtn');
+  btn.disabled = true; btn.textContent = 'Verifying…';
+  try {
+    const res = await fetch('/email/verify-otp', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ email, otp }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.verified) {
+      errEl.textContent = data.error || 'Verification failed.'; return;
+    }
+    verifiedEmail = email;
+    document.getElementById('emailStep2Dot').className = 'modal-step done';
+    document.getElementById('emailModal').style.display = 'none';
+    proceedAfterEmail();
+  } catch (e) {
+    errEl.textContent = 'Network error. Please try again.';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Verify & Continue';
+  }
+}
+
+function backToEmailStep() {
+  document.getElementById('emailStep2').style.display = 'none';
+  document.getElementById('emailStep1').style.display = '';
+  document.getElementById('emailStep1Dot').className = 'modal-step active';
+  document.getElementById('emailStep2Dot').className = 'modal-step';
+  document.getElementById('otpInput').value = '';
+  document.getElementById('otpError').textContent = '';
+}
+
+function skipEmailAndContinue() {
+  verifiedEmail = null;
+  document.getElementById('emailModal').style.display = 'none';
+  proceedAfterEmail();
+}
+
+// Allow Enter key on OTP input
+document.addEventListener('DOMContentLoaded', () => {
+  const otpInput = document.getElementById('otpInput');
+  if (otpInput) otpInput.addEventListener('keydown', e => { if (e.key === 'Enter') verifyOtp(); });
+  const emailInput = document.getElementById('emailInput');
+  if (emailInput) emailInput.addEventListener('keydown', e => { if (e.key === 'Enter') sendOtp(); });
+});
 
 // ── PAYMENT CONFIG ────────────────────────────────────────────────────────
 async function loadPaymentConfig() {
@@ -690,8 +854,9 @@ async function loadPaymentConfig() {
         const s = document.createElement('script');
         s.src = 'https://checkout.razorpay.com/v1/checkout.js';
         s.async = true;
+        s.onload  = () => { razorpayLoaded = true; };
+        s.onerror = () => { console.error('Failed to load Razorpay Checkout JS'); };
         document.head.appendChild(s);
-        razorpayLoaded = true;
       }
     }
   } catch (_) {}
@@ -1196,6 +1361,14 @@ function toggleSec(head) {
 // ── DOWNLOAD FLOW ─────────────────────────────────────────────────────────
 function initiateDownload() {
   if (!currentReviewId) { alert('No review available to download.'); return; }
+  // Show email collection first (if server has email configured and not already verified)
+  if (paymentConfig && paymentConfig.email_enabled && !verifiedEmail) {
+    showEmailModal();
+  } else {
+    proceedAfterEmail();
+  }
+}
+function proceedAfterEmail() {
   if (paymentConfig && paymentConfig.enabled) {
     document.getElementById('paymentModal').style.display = 'flex';
   } else {
@@ -1211,19 +1384,27 @@ function skipPaymentAndDownload() {
 async function startPayment() {
   if (!paymentConfig || !paymentConfig.enabled) { skipPaymentAndDownload(); return; }
   const btn = document.getElementById('payBtn');
+  const modal = document.getElementById('paymentModal');
   btn.disabled = true; btn.textContent = 'Creating order…';
   try {
+    if (typeof Razorpay === 'undefined') {
+      throw new Error('Razorpay Checkout not loaded. Please refresh the page and try again.');
+    }
     const res = await fetch('/payment/create-order', {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({ review_id: currentReviewId }),
     });
     if (!res.ok) throw new Error((await res.json().catch(()=>({}))).error || 'Order failed');
     const order = await res.json();
+    pendingOrderId = order.order_id;
+    // Hide our modal so it doesn't cover Razorpay's checkout overlay
+    modal.style.display = 'none';
     const rzp = new Razorpay({
       key: order.key_id, amount: order.amount, currency: order.currency,
-      name: 'AI Peer Review System', description: 'Peer Review PDF Download',
+      name: 'Health Care Expert Reviews', description: 'Peer Review PDF Download',
       order_id: order.order_id,
       handler: async (response) => {
+        pendingOrderId = null;
         const v = await fetch('/payment/verify', {
           method:'POST', headers:{'Content-Type':'application/json'},
           body: JSON.stringify({...response, review_id: currentReviewId}),
@@ -1237,19 +1418,80 @@ async function startPayment() {
         else alert('Payment verification failed. Please download free.');
       },
       theme: { color: '#00c9b1' },
-      modal: { ondismiss: () => { btn.disabled=false; btn.textContent='🔒 Pay ₹100 & Download'; } },
+      modal: { ondismiss: () => {
+        // User closed Razorpay popup or returned from UPI app — show fallback
+        showPaymentFallback(modal, btn);
+      }},
     });
     rzp.open();
   } catch (e) {
+    modal.style.display = 'flex';
+    btn.disabled = false; btn.textContent = '🔒 Pay ₹50 & Download';
     alert('Payment error: ' + e.message);
-  } finally {
-    btn.disabled=false; btn.textContent='🔒 Pay ₹100 & Download';
   }
 }
 function downloadFromCloud() {
   const btn = document.getElementById('cloudBtn');
   if (btn._gcsUrl) window.open(btn._gcsUrl, '_blank');
 }
+
+// ── PAYMENT STATUS FALLBACK (mobile UPI / GPay) ──────────────────────────
+function showPaymentFallback(modal, btn) {
+  modal.style.display = 'flex';
+  if (pendingOrderId) {
+    // Payment may have completed in GPay but callback was lost —
+    // show a "Check Payment Status" button alongside the retry option.
+    btn.disabled = false; btn.textContent = '🔒 Pay ₹50 & Download';
+    let checkBtn = document.getElementById('checkPaymentBtn');
+    if (!checkBtn) {
+      checkBtn = document.createElement('button');
+      checkBtn.id = 'checkPaymentBtn';
+      checkBtn.className = 'action-btn action-btn-primary';
+      checkBtn.style.marginTop = '0.5rem';
+      checkBtn.textContent = 'Already paid? Check Payment Status';
+      checkBtn.onclick = checkPaymentStatus;
+      btn.parentElement.insertBefore(checkBtn, btn.nextSibling);
+    }
+    checkBtn.style.display = '';
+  } else {
+    btn.disabled = false; btn.textContent = '🔒 Pay ₹50 & Download';
+  }
+}
+
+async function checkPaymentStatus() {
+  const checkBtn = document.getElementById('checkPaymentBtn');
+  if (!pendingOrderId || !currentReviewId) return;
+  checkBtn.disabled = true; checkBtn.textContent = 'Checking…';
+  try {
+    const res = await fetch('/payment/check-order', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ order_id: pendingOrderId, review_id: currentReviewId }),
+    });
+    const data = await res.json();
+    if (data.paid) {
+      pendingOrderId = null;
+      document.getElementById('paymentModal').style.display = 'none';
+      if (checkBtn) checkBtn.style.display = 'none';
+      doDownload();
+    } else {
+      checkBtn.textContent = 'Payment not found yet — try again in a moment';
+      checkBtn.disabled = false;
+      setTimeout(() => { checkBtn.textContent = 'Already paid? Check Payment Status'; }, 3000);
+    }
+  } catch (e) {
+    checkBtn.textContent = 'Check failed — tap to retry';
+    checkBtn.disabled = false;
+  }
+}
+
+// Re-check payment status when user returns to the tab (e.g. back from GPay app)
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && pendingOrderId && currentReviewId) {
+    const modal = document.getElementById('paymentModal');
+    const btn = document.getElementById('payBtn');
+    showPaymentFallback(modal, btn);
+  }
+});
 
 // ── MISC UTILITIES ────────────────────────────────────────────────────────
 function esc(s) {

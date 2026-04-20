@@ -34,7 +34,7 @@ If either `RAZORPAY_KEY_ID` or `RAZORPAY_KEY_SECRET` is missing or empty, `PAYME
 ### Current Payment Amount
 
 ```python
-PAYMENT_AMOUNT_PAISE = 10_000  # ₹100 per document (100 INR = 10,000 paise)
+PAYMENT_AMOUNT_PAISE = 5_000  # ₹50 per document (50 INR = 5,000 paise)
 PAYMENT_CURRENCY     = "INR"
 ```
 
@@ -76,7 +76,7 @@ Browser                          Flask Server                    Razorpay API
 
 1. **Config fetch** — On page load the browser calls `GET /payment/config`. If `enabled` is `false`, every download bypasses the payment modal entirely.
 
-2. **Create order** — When the user clicks the download button and payment is enabled, the browser posts `{review_id}` to `POST /payment/create-order`. The server calls `razorpay.Client.order.create()` on Razorpay's servers, which returns a unique `order_id`. This order is locked to the exact amount (₹100) and can only be paid once.
+2. **Create order** — When the user clicks the download button and payment is enabled, the browser posts `{review_id}` to `POST /payment/create-order`. The server calls `razorpay.Client.order.create()` on Razorpay's servers, which returns a unique `order_id`. This order is locked to the exact amount (₹50) and can only be paid once.
 
 3. **Razorpay Checkout popup** — The browser loads Razorpay's official JS (`https://checkout.razorpay.com/v1/checkout.js`) and opens the hosted payment form. The user enters their payment details. Razorpay handles all PCI-sensitive data — the application never sees raw card numbers.
 
@@ -112,10 +112,10 @@ Returns public payment configuration. Called once on page load.
 {
   "enabled": true,
   "key_id": "rzp_test_xxxxxxxxxxxx",
-  "amount": 10000,
+  "amount": 5000,
   "currency": "INR",
-  "description": "Peer Review Report Download — ₹100 per document",
-  "amount_display": "₹100"
+  "description": "Peer Review Report Download — ₹50 per document",
+  "amount_display": "₹50"
 }
 ```
 
@@ -136,7 +136,7 @@ Creates a Razorpay payment order. Requires a valid `review_id` that exists in th
 ```json
 {
   "order_id": "order_XXXXXXXXXXXXXXXXXX",
-  "amount": 10000,
+  "amount": 5000,
   "currency": "INR",
   "key_id": "rzp_test_xxxxxxxxxxxx",
   "review_id": "550e8400-e29b-41d4-a716-446655440000"
@@ -184,7 +184,7 @@ Verifies the HMAC-SHA256 signature returned by Razorpay after a successful payme
 
 The payment is entirely at the user's discretion. The UI presents two options in the payment modal:
 
-- **Pay ₹100 and Download** — Initiates the Razorpay checkout flow.
+- **Pay ₹50 and Download** — Initiates the Razorpay checkout flow.
 - **Skip & Download Free** — Calls `/download/<review_id>` directly, bypassing payment entirely.
 
 No feature is gated behind payment; the same full PDF is delivered in both paths. The payment option exists to support the platform financially but is never forced.

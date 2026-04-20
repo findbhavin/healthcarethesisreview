@@ -134,6 +134,28 @@ class TestAdminAuthentication(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Admin payment test page (auth required)
+# ---------------------------------------------------------------------------
+
+class TestAdminPaymentTestPage(unittest.TestCase):
+
+    def setUp(self):
+        app.config["TESTING"] = True
+        app.config["SECRET_KEY"] = "test-secret-key"
+        self.client = app.test_client()
+
+    def test_payment_test_page_requires_auth(self):
+        resp = self.client.get("/admin/payment-test")
+        self.assertEqual(resp.status_code, 401)
+
+    def test_payment_test_page_after_login_returns_200(self):
+        _login(self.client)
+        resp = self.client.get("/admin/payment-test")
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn(b"Payment Gateway Test", resp.data)
+
+
+# ---------------------------------------------------------------------------
 # Admin guidelines: raw, save
 # ---------------------------------------------------------------------------
 

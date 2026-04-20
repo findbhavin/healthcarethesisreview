@@ -7,4 +7,6 @@ pyyaml==6.0.1
 gunicorn==23.0.0
 reportlab==4.2.5
 google-cloud-storage==2.18.2
-razorpay==1.4.2
+# Razorpay is called directly via REST (urllib) — no SDK needed. This avoids
+# the razorpay 1.x dependency on pkg_resources, which was removed from
+# setuptools 81 and broke `/payment/create-order` on python:3.12-slim.
