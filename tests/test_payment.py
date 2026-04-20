@@ -496,6 +496,166 @@ class TestPaymentCheckOrder(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# /email/* endpoints
+# ---------------------------------------------------------------------------
+
+class TestEmailEndpoints(unittest.TestCase):
+
+    def setUp(self):
+        app.config["TESTING"] = True
+        self.client = app.test_client()
+        _review_store[DUMMY_REVIEW_ID] = dict(DUMMY_REVIEW)
+
+    def tearDown(self):
+        _review_store.pop(DUMMY_REVIEW_ID, None)
+        import app as app_module
+        app_module._otp_store.clear()
+
+    # /email/send-otp
+    def test_send_otp_disabled_returns_503(self):
+        import app as app_module
+        with patch.object(app_module, "EMAIL_ENABLED", False):
+            resp = self.client.post(
+                "/email/send-otp",
+                data=json.dumps({"email": "test@example.com", "review_id": DUMMY_REVIEW_ID}),
+                content_type="application/json",
+            )
+        self.assertEqual(resp.status_code, 503)
+
+    def test_send_otp_invalid_email_returns_400(self):
+        import app as app_module
+        with patch.object(app_module, "EMAIL_ENABLED", True):
+            resp = self.client.post(
+                "/email/send-otp",
+                data=json.dumps({"email": "notanemail", "review_id": DUMMY_REVIEW_ID}),
+                content_type="application/json",
+            )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_send_otp_unknown_review_returns_400(self):
+        import app as app_module
+        with patch.object(app_module, "EMAIL_ENABLED", True):
+            resp = self.client.post(
+                "/email/send-otp",
+                data=json.dumps({"email": "test@example.com", "review_id": "nonexistent"}),
+                content_type="application/json",
+            )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_send_otp_valid_sends_email_and_returns_sent(self):
+        import app as app_module
+        with patch.object(app_module, "EMAIL_ENABLED", True), \
+             patch.object(app_module, "_send_email") as mock_send:
+            resp = self.client.post(
+                "/email/send-otp",
+                data=json.dumps({"email": "test@example.com", "review_id": DUMMY_REVIEW_ID}),
+                content_type="application/json",
+            )
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(json.loads(resp.data)["sent"])
+        mock_send.assert_called_once()
+        # OTP stored
+        self.assertIn("test@example.com", app_module._otp_store)
+
+    # /email/verify-otp
+    def test_verify_otp_no_otp_stored_returns_400(self):
+        resp = self.client.post(
+            "/email/verify-otp",
+            data=json.dumps({"email": "nobody@example.com", "otp": "123456"}),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_verify_otp_wrong_code_returns_400(self):
+        import app as app_module, datetime
+        app_module._otp_store["test@example.com"] = {
+            "otp": "999999",
+            "expires": datetime.datetime.utcnow() + datetime.timedelta(minutes=10),
+            "attempts": 0,
+            "review_id": DUMMY_REVIEW_ID,
+        }
+        resp = self.client.post(
+            "/email/verify-otp",
+            data=json.dumps({"email": "test@example.com", "otp": "123456"}),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(json.loads(resp.data)["verified"])
+
+    def test_verify_otp_correct_code_marks_review_and_returns_verified(self):
+        import app as app_module, datetime
+        app_module._otp_store["test@example.com"] = {
+            "otp": "123456",
+            "expires": datetime.datetime.utcnow() + datetime.timedelta(minutes=10),
+            "attempts": 0,
+            "review_id": DUMMY_REVIEW_ID,
+        }
+        resp = self.client.post(
+            "/email/verify-otp",
+            data=json.dumps({"email": "test@example.com", "otp": "123456"}),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        data = json.loads(resp.data)
+        self.assertTrue(data["verified"])
+        self.assertEqual(_review_store[DUMMY_REVIEW_ID].get("user_email"), "test@example.com")
+        self.assertNotIn("test@example.com", app_module._otp_store)
+
+    def test_verify_otp_expired_returns_400(self):
+        import app as app_module, datetime
+        app_module._otp_store["test@example.com"] = {
+            "otp": "123456",
+            "expires": datetime.datetime.utcnow() - datetime.timedelta(minutes=1),
+            "attempts": 0,
+            "review_id": DUMMY_REVIEW_ID,
+        }
+        resp = self.client.post(
+            "/email/verify-otp",
+            data=json.dumps({"email": "test@example.com", "otp": "123456"}),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    # /email/send-pdf
+    def test_send_pdf_disabled_returns_503(self):
+        import app as app_module
+        with patch.object(app_module, "EMAIL_ENABLED", False):
+            resp = self.client.post(
+                "/email/send-pdf",
+                data=json.dumps({"review_id": DUMMY_REVIEW_ID, "email": "test@example.com"}),
+                content_type="application/json",
+            )
+        self.assertEqual(resp.status_code, 503)
+
+    def test_send_pdf_unknown_review_returns_404(self):
+        import app as app_module
+        with patch.object(app_module, "EMAIL_ENABLED", True):
+            resp = self.client.post(
+                "/email/send-pdf",
+                data=json.dumps({"review_id": "nonexistent", "email": "test@example.com"}),
+                content_type="application/json",
+            )
+        self.assertEqual(resp.status_code, 404)
+
+    def test_send_pdf_valid_sends_email_with_attachment(self):
+        import app as app_module
+        fake_pdf = b"%PDF fake"
+        with patch.object(app_module, "EMAIL_ENABLED", True), \
+             patch.object(app_module, "generate_report", return_value=fake_pdf), \
+             patch.object(app_module, "_send_email") as mock_send:
+            resp = self.client.post(
+                "/email/send-pdf",
+                data=json.dumps({"review_id": DUMMY_REVIEW_ID, "email": "test@example.com"}),
+                content_type="application/json",
+            )
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(json.loads(resp.data)["sent"])
+        # Verify PDF bytes were passed to _send_email
+        args = mock_send.call_args
+        self.assertEqual(args[0][3], fake_pdf)  # pdf_bytes positional arg
+
+
+# ---------------------------------------------------------------------------
 # /payment/test
 # ---------------------------------------------------------------------------
 

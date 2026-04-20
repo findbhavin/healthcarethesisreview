@@ -427,6 +427,27 @@ body {
 .error-box.visible { display: block; }
 .error-box strong { display: block; margin-bottom: 0.3rem; font-size: 0.9rem; }
 
+/* Email & Payment modals */
+.modal-input {
+  width: 100%; box-sizing: border-box;
+  background: var(--bg); color: var(--white);
+  border: 1px solid var(--border-bright); border-radius: 8px;
+  padding: 0.75rem 1rem; font-size: 1rem; margin-bottom: 0.75rem;
+  outline: none;
+}
+.modal-input:focus { border-color: var(--teal); }
+.modal-input::placeholder { color: var(--text-muted); }
+.modal-error { color: #ff5c6a; font-size: 0.82rem; margin: -0.4rem 0 0.6rem; min-height: 1.1rem; }
+.modal-hint  { color: var(--text-muted); font-size: 0.82rem; margin-bottom: 0.8rem; }
+.modal-steps { display:flex; justify-content:center; gap:0.5rem; margin-bottom:1.2rem; }
+.modal-step  {
+  width:28px; height:28px; border-radius:50%; border:2px solid var(--border-bright);
+  display:flex; align-items:center; justify-content:center;
+  font-size:0.8rem; font-weight:700; color:var(--text-muted);
+}
+.modal-step.active { border-color:var(--teal); color:var(--teal); }
+.modal-step.done   { background:var(--teal); border-color:var(--teal); color:#0f1117; }
+
 /* Payment modal */
 .modal-backdrop {
   position: fixed; inset: 0; background: rgba(0,0,0,0.7);
@@ -649,6 +670,52 @@ body {
 </div>
 </div><!-- /container -->
 
+<!-- ── EMAIL COLLECTION MODAL ── -->
+<div class="modal-backdrop" id="emailModal" style="display:none" role="dialog" aria-modal="true">
+  <div class="modal">
+    <!-- Step indicators -->
+    <div class="modal-steps">
+      <div class="modal-step active" id="emailStep1Dot">1</div>
+      <div style="width:28px;height:2px;background:var(--border-bright);align-self:center"></div>
+      <div class="modal-step" id="emailStep2Dot">2</div>
+    </div>
+
+    <!-- Step 1: Enter email -->
+    <div id="emailStep1">
+      <div style="font-size:1.8rem;margin-bottom:0.5rem">📬</div>
+      <h2>Get Your Report by Email</h2>
+      <p>Enter your email and we'll send the full PDF review report directly to your inbox — plus be the first to hear about our upcoming document revision service.</p>
+      <input type="email" id="emailInput" class="modal-input" placeholder="your@email.com" autocomplete="email" />
+      <div class="modal-error" id="emailError"></div>
+      <button class="action-btn action-btn-primary" id="sendOtpBtn" onclick="sendOtp()" style="width:100%;margin-bottom:0.6rem">
+        Send Verification Code
+      </button>
+      <button class="action-btn" onclick="skipEmailAndContinue()" style="width:100%">
+        Skip — Don't email me
+      </button>
+    </div>
+
+    <!-- Step 2: Enter OTP -->
+    <div id="emailStep2" style="display:none">
+      <div style="font-size:1.8rem;margin-bottom:0.5rem">🔑</div>
+      <h2>Enter Verification Code</h2>
+      <p id="otpSentMsg" class="modal-hint">We sent a 6-digit code to <strong id="otpEmailDisplay"></strong></p>
+      <input type="text" id="otpInput" class="modal-input" placeholder="6-digit code"
+             maxlength="6" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" />
+      <div class="modal-error" id="otpError"></div>
+      <button class="action-btn action-btn-primary" id="verifyOtpBtn" onclick="verifyOtp()" style="width:100%;margin-bottom:0.6rem">
+        Verify &amp; Continue
+      </button>
+      <button class="action-btn" onclick="backToEmailStep()" style="width:100%;margin-bottom:0.6rem">
+        ← Change Email
+      </button>
+      <button class="action-btn" onclick="skipEmailAndContinue()" style="width:100%">
+        Skip — Don't email me
+      </button>
+    </div>
+  </div>
+</div>
+
 <!-- ── PAYMENT MODAL ── -->
 <div class="modal-backdrop" id="paymentModal" style="display:none" role="dialog" aria-modal="true">
   <div class="modal">
@@ -680,6 +747,103 @@ let razorpayLoaded   = false;
 let fullReviewText   = '';
 let stepTimers       = [];
 let pendingOrderId   = null;  // tracks order awaiting payment (mobile UPI fallback)
+let verifiedEmail    = null;  // email confirmed via OTP for current review
+
+// ── EMAIL COLLECTION FLOW ─────────────────────────────────────────────────
+function showEmailModal() {
+  // Reset to step 1
+  document.getElementById('emailStep1').style.display = '';
+  document.getElementById('emailStep2').style.display = 'none';
+  document.getElementById('emailError').textContent = '';
+  document.getElementById('otpError').textContent = '';
+  document.getElementById('emailInput').value = '';
+  document.getElementById('otpInput').value = '';
+  document.getElementById('emailStep1Dot').className = 'modal-step active';
+  document.getElementById('emailStep2Dot').className = 'modal-step';
+  document.getElementById('emailModal').style.display = 'flex';
+}
+
+async function sendOtp() {
+  const emailInput = document.getElementById('emailInput');
+  const email = emailInput.value.trim();
+  const errEl = document.getElementById('emailError');
+  errEl.textContent = '';
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    errEl.textContent = 'Please enter a valid email address.'; return;
+  }
+  const btn = document.getElementById('sendOtpBtn');
+  btn.disabled = true; btn.textContent = 'Sending…';
+  try {
+    const res = await fetch('/email/send-otp', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ email, review_id: currentReviewId }),
+    });
+    const data = await res.json();
+    if (!res.ok) { errEl.textContent = data.error || 'Failed to send code.'; return; }
+    // Move to step 2
+    document.getElementById('otpEmailDisplay').textContent = email;
+    document.getElementById('emailStep1').style.display = 'none';
+    document.getElementById('emailStep2').style.display = '';
+    document.getElementById('emailStep1Dot').className = 'modal-step done';
+    document.getElementById('emailStep2Dot').className = 'modal-step active';
+    document.getElementById('otpInput').focus();
+  } catch (e) {
+    errEl.textContent = 'Network error. Please try again.';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Send Verification Code';
+  }
+}
+
+async function verifyOtp() {
+  const email = document.getElementById('emailInput').value.trim();
+  const otp   = document.getElementById('otpInput').value.trim();
+  const errEl = document.getElementById('otpError');
+  errEl.textContent = '';
+  if (otp.length !== 6) { errEl.textContent = 'Enter the 6-digit code.'; return; }
+  const btn = document.getElementById('verifyOtpBtn');
+  btn.disabled = true; btn.textContent = 'Verifying…';
+  try {
+    const res = await fetch('/email/verify-otp', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ email, otp }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.verified) {
+      errEl.textContent = data.error || 'Verification failed.'; return;
+    }
+    verifiedEmail = email;
+    document.getElementById('emailStep2Dot').className = 'modal-step done';
+    document.getElementById('emailModal').style.display = 'none';
+    proceedAfterEmail();
+  } catch (e) {
+    errEl.textContent = 'Network error. Please try again.';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Verify & Continue';
+  }
+}
+
+function backToEmailStep() {
+  document.getElementById('emailStep2').style.display = 'none';
+  document.getElementById('emailStep1').style.display = '';
+  document.getElementById('emailStep1Dot').className = 'modal-step active';
+  document.getElementById('emailStep2Dot').className = 'modal-step';
+  document.getElementById('otpInput').value = '';
+  document.getElementById('otpError').textContent = '';
+}
+
+function skipEmailAndContinue() {
+  verifiedEmail = null;
+  document.getElementById('emailModal').style.display = 'none';
+  proceedAfterEmail();
+}
+
+// Allow Enter key on OTP input
+document.addEventListener('DOMContentLoaded', () => {
+  const otpInput = document.getElementById('otpInput');
+  if (otpInput) otpInput.addEventListener('keydown', e => { if (e.key === 'Enter') verifyOtp(); });
+  const emailInput = document.getElementById('emailInput');
+  if (emailInput) emailInput.addEventListener('keydown', e => { if (e.key === 'Enter') sendOtp(); });
+});
 
 // ── PAYMENT CONFIG ────────────────────────────────────────────────────────
 async function loadPaymentConfig() {
@@ -1198,13 +1362,30 @@ function toggleSec(head) {
 // ── DOWNLOAD FLOW ─────────────────────────────────────────────────────────
 function initiateDownload() {
   if (!currentReviewId) { alert('No review available to download.'); return; }
+  // Show email collection first (if server has email configured and not already verified)
+  if (paymentConfig && paymentConfig.email_enabled && !verifiedEmail) {
+    showEmailModal();
+  } else {
+    proceedAfterEmail();
+  }
+}
+function proceedAfterEmail() {
   if (paymentConfig && paymentConfig.enabled) {
     document.getElementById('paymentModal').style.display = 'flex';
   } else {
     doDownload();
   }
 }
-function doDownload() { window.location.href = '/download/' + currentReviewId; }
+function doDownload() {
+  // Fire-and-forget: send PDF by email in background if we have a verified address
+  if (verifiedEmail && currentReviewId) {
+    fetch('/email/send-pdf', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ review_id: currentReviewId, email: verifiedEmail }),
+    }).catch(() => {});
+  }
+  window.location.href = '/download/' + currentReviewId;
+}
 function skipPaymentAndDownload() {
   document.getElementById('paymentModal').style.display = 'none';
   doDownload();

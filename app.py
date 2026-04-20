@@ -41,6 +41,13 @@ import secrets
 import base64
 import urllib.request
 import urllib.error
+import smtplib
+import random
+import re
+import datetime
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.application import MIMEApplication
 from functools import wraps
 
 from flask import Flask, request, jsonify, send_file, Response, stream_with_context, session
@@ -137,6 +144,45 @@ ALLOWED_EXTENSIONS = {"pdf", "docx", "txt"}
 # In-memory review store (keyed by review_id).
 # For multi-instance Cloud Run, replace with Cloud Storage or Firestore.
 _review_store: dict[str, dict] = {}
+
+# ---------------------------------------------------------------------------
+# Email configuration (Gmail SMTP or any STARTTLS provider)
+# ---------------------------------------------------------------------------
+SMTP_EMAIL    = os.environ.get("SMTP_EMAIL", "")
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
+SMTP_HOST     = os.environ.get("SMTP_HOST", "smtp.gmail.com")
+SMTP_PORT     = int(os.environ.get("SMTP_PORT", "587"))
+EMAIL_ENABLED = bool(SMTP_EMAIL and SMTP_PASSWORD)
+
+_otp_store: dict[str, dict] = {}   # email → {otp, expires, attempts, review_id}
+_OTP_EXPIRY_MINUTES = 10
+_OTP_MAX_ATTEMPTS   = 3
+_EMAIL_RE = re.compile(r'^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$')
+
+
+def _send_email(
+    to_email: str,
+    subject: str,
+    html_body: str,
+    pdf_bytes: bytes | None = None,
+    pdf_filename: str = "review.pdf",
+) -> None:
+    """Send an HTML email, optionally with a PDF attachment, via SMTP STARTTLS."""
+    msg = MIMEMultipart("mixed")
+    msg["From"]    = f"MedScript AI Review <{SMTP_EMAIL}>"
+    msg["To"]      = to_email
+    msg["Subject"] = subject
+    msg.attach(MIMEText(html_body, "html"))
+    if pdf_bytes:
+        part = MIMEApplication(pdf_bytes, Name=pdf_filename)
+        part["Content-Disposition"] = f'attachment; filename="{pdf_filename}"'
+        msg.attach(part)
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as s:
+        s.ehlo()
+        s.starttls()
+        s.login(SMTP_EMAIL, SMTP_PASSWORD)
+        s.sendmail(SMTP_EMAIL, to_email, msg.as_string())
+
 
 # ---------------------------------------------------------------------------
 # Payment configuration (Razorpay)
@@ -380,6 +426,147 @@ def download_report(review_id: str):
 
 
 # ---------------------------------------------------------------------------
+# Email endpoints (OTP verification + PDF delivery)
+# ---------------------------------------------------------------------------
+
+@app.route("/email/send-otp", methods=["POST"])
+def email_send_otp():
+    """Send a 6-digit OTP to the given email address."""
+    if not EMAIL_ENABLED:
+        return jsonify({"error": "Email delivery not configured on this server."}), 503
+
+    data      = request.get_json(silent=True) or {}
+    email     = (data.get("email") or "").strip().lower()
+    review_id = data.get("review_id", "")
+
+    if not _EMAIL_RE.match(email):
+        return jsonify({"error": "Invalid email address."}), 400
+    if review_id not in _review_store:
+        return jsonify({"error": "Invalid review ID."}), 400
+
+    otp     = f"{random.randint(100000, 999999)}"
+    expires = datetime.datetime.utcnow() + datetime.timedelta(minutes=_OTP_EXPIRY_MINUTES)
+    _otp_store[email] = {"otp": otp, "expires": expires, "attempts": 0, "review_id": review_id}
+
+    html = f"""
+    <div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto">
+      <div style="background:#0f1117;padding:20px;border-radius:8px 8px 0 0">
+        <h2 style="color:#00c9b1;margin:0">MedScript AI Review</h2>
+      </div>
+      <div style="padding:24px;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 8px 8px">
+        <p>Your email verification code is:</p>
+        <p style="font-size:2.2rem;font-weight:700;letter-spacing:6px;color:#00c9b1;margin:16px 0">{otp}</p>
+        <p style="color:#888;font-size:0.85rem">This code expires in {_OTP_EXPIRY_MINUTES} minutes. Do not share it with anyone.</p>
+      </div>
+    </div>
+    """
+    try:
+        _send_email(email, "Your Verification Code — MedScript AI Review", html)
+        logger.info(f"OTP sent to {email} for review {review_id}")
+    except Exception as e:
+        logger.exception("Failed to send OTP email")
+        return jsonify({"error": "Could not send email. Please check the address and try again."}), 500
+
+    return jsonify({"sent": True})
+
+
+@app.route("/email/verify-otp", methods=["POST"])
+def email_verify_otp():
+    """Verify the OTP and store the email on the review record."""
+    data      = request.get_json(silent=True) or {}
+    email     = (data.get("email") or "").strip().lower()
+    otp_input = (data.get("otp") or "").strip()
+
+    entry = _otp_store.get(email)
+    if not entry:
+        return jsonify({"verified": False, "error": "No verification code found. Please request a new one."}), 400
+    if datetime.datetime.utcnow() > entry["expires"]:
+        _otp_store.pop(email, None)
+        return jsonify({"verified": False, "error": "Code expired. Please request a new one."}), 400
+    if entry["attempts"] >= _OTP_MAX_ATTEMPTS:
+        _otp_store.pop(email, None)
+        return jsonify({"verified": False, "error": "Too many attempts. Please request a new code."}), 400
+    if otp_input != entry["otp"]:
+        _otp_store[email]["attempts"] += 1
+        remaining = _OTP_MAX_ATTEMPTS - _otp_store[email]["attempts"]
+        return jsonify({"verified": False, "error": f"Incorrect code. {remaining} attempt(s) left."}), 400
+
+    # Verified — attach email to review
+    review_id = entry["review_id"]
+    if review_id in _review_store:
+        _review_store[review_id]["user_email"] = email
+    _otp_store.pop(email, None)
+    logger.info(f"Email verified: {email} for review {review_id}")
+    return jsonify({"verified": True, "review_id": review_id})
+
+
+@app.route("/email/send-pdf", methods=["POST"])
+def email_send_pdf():
+    """Generate the review PDF and email it with a CTA to the verified address."""
+    if not EMAIL_ENABLED:
+        return jsonify({"error": "Email delivery not configured on this server."}), 503
+
+    data      = request.get_json(silent=True) or {}
+    review_id = data.get("review_id", "")
+    email     = (data.get("email") or "").strip().lower()
+
+    if not email or not _EMAIL_RE.match(email):
+        return jsonify({"error": "Invalid email address."}), 400
+    result = _review_store.get(review_id)
+    if not result:
+        return jsonify({"error": "Review not found."}), 404
+
+    try:
+        pdf_bytes   = generate_report(result)
+        title       = result.get("manuscript_title", "Your Manuscript")
+        decision    = result.get("decision", "See attached report")
+        safe_name   = title[:40].replace(" ", "_").replace("/", "-").replace("\\", "-")
+        pdf_filename = f"PeerReview_{safe_name}.pdf"
+
+        html_body = f"""<!DOCTYPE html>
+<html>
+<body style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;color:#333;padding:0">
+  <div style="background:#0f1117;padding:24px;border-radius:8px 8px 0 0">
+    <h1 style="color:#00c9b1;margin:0;font-size:1.4rem">MedScript AI Peer Review</h1>
+  </div>
+  <div style="padding:28px;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 8px 8px">
+    <p>Dear Researcher,</p>
+    <p>Your AI peer review report is ready. Please find it <strong>attached to this email</strong>.</p>
+    <table style="width:100%;border-collapse:collapse;margin:20px 0;font-size:0.9rem">
+      <tr style="background:#f7f7f7">
+        <td style="padding:10px 14px;font-weight:bold;width:38%;border:1px solid #e8e8e8">Manuscript</td>
+        <td style="padding:10px 14px;border:1px solid #e8e8e8">{title[:80]}</td>
+      </tr>
+      <tr>
+        <td style="padding:10px 14px;font-weight:bold;border:1px solid #e8e8e8">Editorial Decision</td>
+        <td style="padding:10px 14px;border:1px solid #e8e8e8"><strong>{decision}</strong></td>
+      </tr>
+    </table>
+
+    <div style="background:#f0fffe;border:2px solid #00c9b1;border-radius:10px;padding:22px;margin-top:24px">
+      <h3 style="color:#00875f;margin-top:0;font-size:1.05rem">🚀 Coming Soon: Document Revision Service</h3>
+      <p style="margin-bottom:8px">Struggling to address the reviewer comments and revise your manuscript?</p>
+      <p style="margin-bottom:0">We are launching a <strong>personalised document revision service</strong> where our experts will help you strengthen your manuscript and prepare it for successful resubmission. <strong>Stay tuned — we'll reach out soon!</strong></p>
+    </div>
+
+    <hr style="border:none;border-top:1px solid #ebebeb;margin:28px 0">
+    <p style="color:#aaa;font-size:0.8rem;margin:0">
+      This report was generated by MedScript AI Peer Review. Reply to this email if you have any questions.
+    </p>
+  </div>
+</body>
+</html>"""
+
+        _send_email(email, f"Your Peer Review Report — {title[:50]}", html_body, pdf_bytes, pdf_filename)
+        logger.info(f"PDF report emailed to {email} for review {review_id}")
+        return jsonify({"sent": True})
+
+    except Exception as e:
+        logger.exception("Failed to send PDF email")
+        return jsonify({"error": f"Could not send email: {e}"}), 500
+
+
+# ---------------------------------------------------------------------------
 # Review poll endpoint — for reconnecting after network drops
 # ---------------------------------------------------------------------------
 
@@ -437,6 +624,7 @@ def payment_config():
         "currency": PAYMENT_CURRENCY,
         "description": PAYMENT_DESCRIPTION,
         "amount_display": "₹50",
+        "email_enabled": EMAIL_ENABLED,
     })
 
 
