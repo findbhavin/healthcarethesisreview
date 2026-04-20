@@ -821,6 +821,154 @@ def payment_check_order():
 
 
 # ---------------------------------------------------------------------------
+# QR Code payment (UPI — scan with GPay/PhonePe/any UPI app from laptop)
+# ---------------------------------------------------------------------------
+
+RAZORPAY_QR_URL = "https://api.razorpay.com/v1/payments/qr_codes"
+
+
+@app.route("/payment/create-qr", methods=["POST"])
+def payment_create_qr():
+    """
+    Create a Razorpay UPI QR code so the user can scan it with any UPI app
+    (GPay, PhonePe, Paytm, BHIM) to pay from a laptop.
+
+    QR codes are single-use and expire after 30 minutes.  UPI is India-only —
+    international users should use the card/wallet option in the standard
+    Razorpay Checkout popup.
+
+    JSON body: {"review_id": "..."}
+    Returns:   {"qr_id", "image_url", "amount", "currency", "expires_at"}
+    """
+    if not PAYMENT_ENABLED:
+        return jsonify({"error": "Payment gateway not configured."}), 503
+
+    data = request.get_json(silent=True) or {}
+    review_id = data.get("review_id", "")
+    if not review_id or review_id not in _review_store:
+        return jsonify({"error": "Invalid or expired review ID."}), 400
+
+    import time
+    close_by = int(time.time()) + 1800  # 30 minutes from now
+
+    try:
+        auth_header = "Basic " + base64.b64encode(
+            f"{RAZORPAY_KEY_ID}:{RAZORPAY_KEY_SECRET}".encode()
+        ).decode()
+        payload = json.dumps({
+            "type": "upi_qr",
+            "name": "Health Care Expert Reviews",
+            "usage": "single_use",
+            "fixed_amount": True,
+            "payment_amount": PAYMENT_AMOUNT_PAISE,
+            "description": PAYMENT_DESCRIPTION,
+            "close_by": close_by,
+            "notes": {"review_id": review_id, "product": "Peer Review PDF"},
+        }).encode()
+        req = urllib.request.Request(
+            RAZORPAY_QR_URL,
+            data=payload,
+            headers={
+                "Authorization": auth_header,
+                "Content-Type": "application/json",
+                "User-Agent": "healthcarethesisreview/1.0",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            qr = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode("utf-8", errors="replace")
+        logger.exception(f"Razorpay QR creation failed ({e.code}): {err_body}")
+        return jsonify({"error": f"QR creation failed: {err_body}"}), 500
+    except Exception as e:
+        logger.exception("Razorpay QR creation failed")
+        return jsonify({"error": f"QR creation failed: {e}"}), 500
+
+    _review_store[review_id]["pending_qr_id"] = qr["id"]
+    logger.info(f"QR code created: {qr['id']} for review {review_id}")
+    return jsonify({
+        "qr_id": qr["id"],
+        "image_url": qr.get("image_url", ""),
+        "amount": PAYMENT_AMOUNT_PAISE,
+        "currency": PAYMENT_CURRENCY,
+        "expires_at": close_by,
+        "review_id": review_id,
+    })
+
+
+@app.route("/payment/check-qr", methods=["POST"])
+def payment_check_qr():
+    """
+    Poll Razorpay to see if a QR code payment has been captured.
+    Called every few seconds by the frontend while the QR is displayed.
+
+    JSON body: {"qr_id": "qr_...", "review_id": "..."}
+    Returns:   {"paid": true/false, "review_id", "payment_id"?}
+    """
+    if not PAYMENT_ENABLED:
+        return jsonify({"error": "Payment gateway not configured."}), 503
+
+    data      = request.get_json(silent=True) or {}
+    qr_id     = data.get("qr_id", "")
+    review_id = data.get("review_id", "")
+
+    if not qr_id or not review_id:
+        return jsonify({"error": "Missing qr_id or review_id."}), 400
+    if review_id not in _review_store:
+        return jsonify({"error": "Invalid or expired review ID."}), 400
+
+    try:
+        auth_header = "Basic " + base64.b64encode(
+            f"{RAZORPAY_KEY_ID}:{RAZORPAY_KEY_SECRET}".encode()
+        ).decode()
+        url = f"https://api.razorpay.com/v1/payments/qr_codes/{qr_id}/payments"
+        req = urllib.request.Request(
+            url,
+            headers={
+                "Authorization": auth_header,
+                "User-Agent": "healthcarethesisreview/1.0",
+            },
+            method="GET",
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            payments = json.loads(resp.read().decode("utf-8"))
+    except Exception as e:
+        logger.exception("Failed to check QR payments")
+        return jsonify({"error": f"Could not check QR status: {e}"}), 500
+
+    items = payments.get("items", [])
+    captured = [p for p in items if p.get("status") == "captured"]
+
+    if captured:
+        payment_id = captured[0]["id"]
+        invoice_id = f"INV-{review_id[:8]}-{payment_id[-6:]}"
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        _review_store[review_id]["payment_verified"] = True
+        _review_store[review_id]["order_id"] = qr_id
+        _review_store[review_id]["payment_id"] = payment_id
+        _review_store[review_id]["paid_at_utc"] = now_iso
+        _review_store[review_id]["invoice"] = {
+            "invoice_id": invoice_id,
+            "order_id": qr_id,
+            "payment_id": payment_id,
+            "amount_paise": PAYMENT_AMOUNT_PAISE,
+            "currency": PAYMENT_CURRENCY,
+            "description": PAYMENT_DESCRIPTION,
+            "paid_at_utc": now_iso,
+        }
+        logger.info(f"QR payment confirmed for review {review_id}, payment {payment_id}")
+        return jsonify({
+            "paid": True,
+            "review_id": review_id,
+            "payment_id": payment_id,
+            "invoice_download_url": f"/invoice/{review_id}",
+        })
+
+    return jsonify({"paid": False, "review_id": review_id})
+
+
+# ---------------------------------------------------------------------------
 # Invoice generation & delivery
 # ---------------------------------------------------------------------------
 

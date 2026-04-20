@@ -718,22 +718,53 @@ body {
 <!-- ── PAYMENT MODAL ── -->
 <div class="modal-backdrop" id="paymentModal" style="display:none" role="dialog" aria-modal="true">
   <div class="modal">
-    <div style="font-size:2rem;margin-bottom:0.5rem;">💳</div>
-    <h2>Support This Service</h2>
-    <p>Would you like to make a small contribution to help sustain this peer review service? Paying is entirely optional.</p>
-    <div class="price-badge">
-      ₹50
-      <small>~$0.60 USD per document · International cards accepted</small>
+    <!-- Default payment choice view -->
+    <div id="paymentChoiceView">
+      <div style="font-size:2rem;margin-bottom:0.5rem;">💳</div>
+      <h2>Support This Service</h2>
+      <p>Would you like to make a small contribution to help sustain this peer review service? Paying is entirely optional.</p>
+      <div class="price-badge">
+        ₹50
+        <small>~$0.60 USD · Cards (Visa/Mastercard/Amex) accepted worldwide</small>
+      </div>
+      <div class="modal-actions">
+        <button class="action-btn action-btn-primary" id="payBtn" onclick="startPayment()">
+          💳 Pay by Card / UPI / Netbanking
+        </button>
+        <button class="action-btn" id="qrBtn" onclick="showQrView()">
+          📷 Scan QR Code (GPay / PhonePe / BHIM)
+        </button>
+        <button class="action-btn" onclick="skipPaymentAndDownload()">
+          Download Free
+        </button>
+      </div>
+      <p class="modal-secure">🔒 Secured by Razorpay · International cards supported · UPI QR for India</p>
     </div>
-    <div class="modal-actions">
-      <button class="action-btn action-btn-primary" id="payBtn" onclick="startPayment()">
-        🔒 Pay ₹50 &amp; Download
-      </button>
-      <button class="action-btn" onclick="skipPaymentAndDownload()">
-        Download Free
-      </button>
+
+    <!-- QR code view (shown when user chooses scan-to-pay) -->
+    <div id="paymentQrView" style="display:none">
+      <div style="font-size:2rem;margin-bottom:0.5rem;">📱</div>
+      <h2>Scan to Pay ₹50</h2>
+      <p style="margin-bottom:0.8rem">Open <strong>GPay, PhonePe, Paytm</strong> or any UPI app on your phone and scan this QR code.</p>
+      <div id="qrLoading" style="padding:2rem;color:var(--text-muted)">
+        <div style="font-size:1.2rem">⏳ Generating QR code…</div>
+      </div>
+      <div id="qrContent" style="display:none">
+        <div style="background:white;padding:14px;border-radius:10px;margin:1rem auto;max-width:260px;box-shadow:0 4px 20px rgba(0,201,177,0.15)">
+          <img id="qrImage" src="" alt="UPI QR Code" style="width:100%;height:auto;display:block" />
+        </div>
+        <div id="qrStatus" style="color:var(--teal);font-size:0.9rem;margin-bottom:0.6rem">
+          <span id="qrStatusText">⌛ Waiting for payment…</span>
+        </div>
+        <p style="color:var(--text-muted);font-size:0.82rem;margin-bottom:1rem">
+          QR expires in <span id="qrExpiry">30:00</span>. Payment is confirmed automatically once you complete it.
+        </p>
+      </div>
+      <div id="qrError" style="display:none;color:var(--red);background:var(--red-dim);padding:0.8rem;border-radius:8px;margin:0.8rem 0;font-size:0.9rem"></div>
+      <div class="modal-actions">
+        <button class="action-btn" onclick="cancelQrPayment()">← Back to payment options</button>
+      </div>
     </div>
-    <p class="modal-secure">🔒 Secured by Razorpay · Supports INR, USD, EUR, GBP &amp; more</p>
   </div>
 </div>
 
@@ -747,6 +778,9 @@ let fullReviewText   = '';
 let stepTimers       = [];
 let pendingOrderId   = null;  // tracks order awaiting payment (mobile UPI fallback)
 let verifiedEmail    = null;
+let qrPollInterval   = null;  // polling timer for QR payment
+let qrExpiryInterval = null;  // countdown timer for QR expiry
+let currentQrId      = null;  // active QR code id
 
 // ── EMAIL COLLECTION FLOW ─────────────────────────────────────────────────
 function showEmailModal() {
@@ -1390,6 +1424,96 @@ function sendInvoice(paymentId, orderId) {
       payment_id: paymentId, order_id: orderId,
     }),
   }).catch(() => {});
+}
+
+// ── QR CODE PAYMENT (UPI — scan from laptop with phone) ──────────────────
+async function showQrView() {
+  if (!paymentConfig || !paymentConfig.enabled) { skipPaymentAndDownload(); return; }
+  if (!currentReviewId) { alert('Please run a review first.'); return; }
+
+  document.getElementById('paymentChoiceView').style.display = 'none';
+  document.getElementById('paymentQrView').style.display = '';
+  document.getElementById('qrLoading').style.display = '';
+  document.getElementById('qrContent').style.display = 'none';
+  document.getElementById('qrError').style.display = 'none';
+
+  try {
+    const res = await fetch('/payment/create-qr', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ review_id: currentReviewId }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'QR creation failed');
+    if (!data.image_url) throw new Error('No QR image returned from gateway');
+
+    currentQrId = data.qr_id;
+    document.getElementById('qrImage').src = data.image_url;
+    document.getElementById('qrLoading').style.display = 'none';
+    document.getElementById('qrContent').style.display = '';
+
+    startQrExpiryCountdown(data.expires_at);
+    startQrPolling();
+  } catch (e) {
+    document.getElementById('qrLoading').style.display = 'none';
+    const errEl = document.getElementById('qrError');
+    errEl.style.display = '';
+    errEl.textContent = 'Could not generate QR code: ' + e.message;
+  }
+}
+
+function startQrPolling() {
+  if (qrPollInterval) clearInterval(qrPollInterval);
+  qrPollInterval = setInterval(async () => {
+    if (!currentQrId || !currentReviewId) return;
+    try {
+      const res = await fetch('/payment/check-qr', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ qr_id: currentQrId, review_id: currentReviewId }),
+      });
+      const data = await res.json();
+      if (data.paid) {
+        document.getElementById('qrStatusText').textContent = '✓ Payment received!';
+        stopQrTimers();
+        if (data.payment_id && currentQrId) sendInvoice(data.payment_id, currentQrId);
+        setTimeout(() => {
+          document.getElementById('paymentModal').style.display = 'none';
+          resetPaymentModal();
+          doDownload();
+        }, 1200);
+      }
+    } catch (_) { /* keep polling; transient errors are fine */ }
+  }, 3000);
+}
+
+function startQrExpiryCountdown(expiresAtUnix) {
+  if (qrExpiryInterval) clearInterval(qrExpiryInterval);
+  const expiryEl = document.getElementById('qrExpiry');
+  qrExpiryInterval = setInterval(() => {
+    const remaining = Math.max(0, expiresAtUnix - Math.floor(Date.now() / 1000));
+    const mins = Math.floor(remaining / 60);
+    const secs = remaining % 60;
+    expiryEl.textContent = `${mins}:${String(secs).padStart(2, '0')}`;
+    if (remaining <= 0) {
+      stopQrTimers();
+      document.getElementById('qrStatusText').textContent = '⏱ QR expired — please try again';
+    }
+  }, 1000);
+}
+
+function stopQrTimers() {
+  if (qrPollInterval)   { clearInterval(qrPollInterval);   qrPollInterval = null; }
+  if (qrExpiryInterval) { clearInterval(qrExpiryInterval); qrExpiryInterval = null; }
+}
+
+function cancelQrPayment() {
+  stopQrTimers();
+  currentQrId = null;
+  resetPaymentModal();
+}
+
+function resetPaymentModal() {
+  document.getElementById('paymentQrView').style.display = 'none';
+  document.getElementById('paymentChoiceView').style.display = '';
 }
 
 async function startPayment() {
