@@ -1375,16 +1375,8 @@ function proceedAfterEmail() {
     doDownload();
   }
 }
-function doDownload() {
-  // Fire-and-forget: send PDF by email in background if we have a verified address
-  if (verifiedEmail && currentReviewId) {
-    fetch('/email/send-pdf', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ review_id: currentReviewId, email: verifiedEmail }),
-    }).catch(() => {});
-  }
-  window.location.href = '/download/' + currentReviewId;
-}
+function doDownload() { window.location.href = '/download/' + currentReviewId; }
+function doInvoiceDownload() { window.location.href = '/invoice/' + currentReviewId; }
 function skipPaymentAndDownload() {
   document.getElementById('paymentModal').style.display = 'none';
   doDownload();
@@ -1418,8 +1410,12 @@ async function startPayment() {
           body: JSON.stringify({...response, review_id: currentReviewId}),
         });
         const vd = await v.json();
-        if (vd.verified) doDownload();
-        else { modal.style.display = 'flex'; alert('Payment verification failed. Please download free.'); }
+        document.getElementById('paymentModal').style.display = 'none';
+        if (vd.verified) {
+          doDownload();
+          setTimeout(() => doInvoiceDownload(), 800);
+        }
+        else alert('Payment verification failed. Please download free.');
       },
       theme: { color: '#00c9b1' },
       modal: { ondismiss: () => {

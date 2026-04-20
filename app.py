@@ -10,7 +10,8 @@ GET  /guidelines-page           Serve the Guidelines page (guidelines.html)
 GET  /health                    Health check (used by Cloud Run)
 POST /review                    Stream 8-stage AI peer review via SSE (text/event-stream)
 GET  /download/<review_id>      Download the PDF review report
-POST /payment/create-order      Create a Razorpay payment order (₹50 per document)
+GET  /invoice/<review_id>       Download the payment invoice PDF (paid reviews)
+POST /payment/create-order      Create a Razorpay payment order (₹100 per document)
 POST /payment/verify            Verify Razorpay payment signature and mark review as paid
 GET  /guidelines/full           Return complete guidelines data (for UI)
 GET  /guidelines/metadata       Return current guidelines version/metadata
@@ -35,6 +36,7 @@ import uuid
 import json
 import logging
 import io
+import datetime
 import hmac
 import hashlib
 import secrets
@@ -54,6 +56,7 @@ from flask import Flask, request, jsonify, send_file, Response, stream_with_cont
 
 from review_agent import run_review, extract_text, stream_review, generate_text
 from report_generator import generate_report
+from invoice_generator import generate_invoice
 from gcs_uploader import (
     upload_report,
     push_rule_version,
@@ -425,6 +428,34 @@ def download_report(review_id: str):
         return jsonify({"error": f"Report generation failed: {e}"}), 500
 
 
+@app.route("/invoice/<review_id>", methods=["GET"])
+def download_invoice(review_id: str):
+    """Download a standalone invoice PDF for a successfully paid review."""
+    result = _review_store.get(review_id)
+    if not result:
+        return jsonify({"error": "Review not found or expired."}), 404
+
+    if not result.get("payment_verified"):
+        return jsonify({"error": "Invoice is available only after successful payment verification."}), 402
+
+    invoice_data = result.get("invoice")
+    if not invoice_data:
+        return jsonify({"error": "Invoice data not found for this review."}), 404
+
+    try:
+        invoice_bytes = generate_invoice(review_id, invoice_data)
+        invoice_id = invoice_data.get("invoice_id", review_id)
+        return send_file(
+            io.BytesIO(invoice_bytes),
+            mimetype="application/pdf",
+            as_attachment=True,
+            download_name=f"Invoice_{invoice_id}.pdf",
+        )
+    except Exception as e:
+        logger.exception("Failed to generate invoice")
+        return jsonify({"error": f"Invoice generation failed: {e}"}), 500
+
+
 # ---------------------------------------------------------------------------
 # Email endpoints (OTP verification + PDF delivery)
 # ---------------------------------------------------------------------------
@@ -706,11 +737,27 @@ def payment_verify():
 
     # Mark review as paid
     if review_id in _review_store:
+        invoice_id = f"INV-{review_id[:8]}-{payment_id[-6:]}"
         _review_store[review_id]["payment_verified"] = True
+        _review_store[review_id]["order_id"] = order_id
         _review_store[review_id]["payment_id"] = payment_id
+        _review_store[review_id]["paid_at_utc"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        _review_store[review_id]["invoice"] = {
+            "invoice_id": invoice_id,
+            "order_id": order_id,
+            "payment_id": payment_id,
+            "amount_paise": PAYMENT_AMOUNT_PAISE,
+            "currency": PAYMENT_CURRENCY,
+            "description": PAYMENT_DESCRIPTION,
+            "paid_at_utc": _review_store[review_id]["paid_at_utc"],
+        }
         logger.info(f"Payment verified for review {review_id}, payment {payment_id}")
 
-    return jsonify({"verified": True, "review_id": review_id})
+    return jsonify({
+        "verified": True,
+        "review_id": review_id,
+        "invoice_download_url": f"/invoice/{review_id}",
+    })
 
 
 @app.route("/payment/check-order", methods=["POST"])
