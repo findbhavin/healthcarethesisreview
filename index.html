@@ -651,7 +651,7 @@ body {
   <!-- Download bar -->
   <div class="download-bar">
     <button class="action-btn action-btn-download" id="downloadBtn" onclick="initiateDownload()" style="display:none;">
-      📥 Download Free Sample PDF
+      📥 Download PDF Report
     </button>
     <button class="action-btn action-btn-download" id="cloudBtn" onclick="downloadFromCloud()" style="display:none;">
       ☁️ Download from Cloud Storage
@@ -660,7 +660,7 @@ body {
 
   <!-- Action bar -->
   <div class="action-bar">
-    <button class="action-btn" onclick="window.print()">🖨 Print Report</button>
+    <button class="action-btn" id="printBtn" onclick="printReport()" disabled title="Available after payment verification">🖨 Print Report</button>
     <button class="action-btn" onclick="copyReport()">📋 Copy Summary</button>
     <button class="action-btn" onclick="viewGuidelines()">📖 View Guidelines</button>
     <button class="action-btn action-btn-primary" onclick="resetApp()">↺ Analyze Another</button>
@@ -790,6 +790,28 @@ let verifiedEmail    = null;
 let qrPollInterval   = null;  // polling timer for QR payment
 let qrExpiryInterval = null;  // countdown timer for QR expiry
 let currentQrId      = null;  // active QR code id
+let fullViewUnlocked = false; // unlocked only after payment (when enabled)
+let latestDoneEvent  = null;  // cached report payload for re-render after unlock
+
+function paymentRequired() {
+  return !!(paymentConfig && paymentConfig.enabled);
+}
+
+function hasFullViewAccess() {
+  return !paymentRequired() || fullViewUnlocked;
+}
+
+function updatePrintAccess() {
+  const printBtn = document.getElementById('printBtn');
+  if (!printBtn) return;
+  if (hasFullViewAccess()) {
+    printBtn.disabled = false;
+    printBtn.title = '';
+  } else {
+    printBtn.disabled = true;
+    printBtn.title = 'Complete payment to enable printing';
+  }
+}
 
 // ── EMAIL COLLECTION FLOW ─────────────────────────────────────────────────
 function showEmailModal() {
@@ -920,6 +942,7 @@ async function loadPaymentConfig() {
         s.onerror = () => { console.error('Failed to load Razorpay Checkout JS'); };
         document.head.appendChild(s);
       }
+      updatePrintAccess();
     }
   } catch (_) {}
 }
@@ -1000,6 +1023,9 @@ async function submitReview() {
   document.getElementById('reportPanel').classList.remove('visible');
   document.getElementById('downloadBtn').style.display = 'none';
   document.getElementById('cloudBtn').style.display    = 'none';
+  fullViewUnlocked = false;
+  latestDoneEvent = null;
+  updatePrintAccess();
   document.getElementById('submitBtn').disabled = true;
   document.getElementById('submitBtn').textContent = '⏳ Reviewing…';
   animateSteps();
@@ -1234,10 +1260,15 @@ function extractTopPriorities(text) {
 
 // ── RENDER REPORT ─────────────────────────────────────────────────────────
 function renderReport(evt) {
+  if (evt.payment_verified === true) {
+    fullViewUnlocked = true;
+  }
+  latestDoneEvent = evt;
   const stageScores   = evt.stage_scores  || {};
   const weightedScore = evt.weighted_score != null ? parseFloat(evt.weighted_score) : null;
   const decision      = evt.decision || 'See report';
   const reviewText    = fullReviewText;
+  const fullAccess    = hasFullViewAccess();
 
   // ── SVG Gauge ──────────────────────────────────────────────────────────
   const score = weightedScore != null ? Math.round(weightedScore) : 0;
@@ -1269,7 +1300,8 @@ function renderReport(evt) {
   document.getElementById('overallSummary').innerHTML =
     `Manuscript: <strong>${esc(evt.manuscript_title || 'Unknown')}</strong><br>` +
     `Word count: ~${(evt.word_count || 0).toLocaleString()} · ` +
-    `WRS: ${score}/100`;
+    `WRS: ${score}/100` +
+    (!fullAccess ? '<br><span style="color:var(--amber)">Sample web view shown. Complete payment to unlock the full online report.</span>' : '');
 
   // ── Score bands ────────────────────────────────────────────────────────
   // Count finding types across all stages
@@ -1315,12 +1347,16 @@ function renderReport(evt) {
 
   // ── Top priorities ─────────────────────────────────────────────────────
   const priorities = extractTopPriorities(reviewText);
+  const shownPriorities = fullAccess ? priorities : priorities.slice(0, 2);
   document.getElementById('priorityList').innerHTML = priorities.length
-    ? priorities.map((p, i) => `
+    ? shownPriorities.map((p, i) => `
         <div class="priority-item">
           <span class="priority-num">${i+1}</span>
           <span>${esc(p)}</span>
-        </div>`).join('')
+        </div>`).join('') +
+      (!fullAccess && priorities.length > shownPriorities.length
+        ? '<div class="priority-item"><span class="priority-num">🔒</span><span>More priority recommendations are available in the paid full report.</span></div>'
+        : '')
     : '<div class="priority-item"><span class="priority-num">✓</span><span>No critical revisions required — see section reports below for details.</span></div>';
 
   // ── Collapsible section reports ────────────────────────────────────────
@@ -1331,7 +1367,8 @@ function renderReport(evt) {
     const block    = stageBlocks[sd.key] || '';
     const score_n  = stageScores[sd.stageNum];
     const secScore = score_n != null ? score_n * 10 : null;  // convert 0–10 to 0–100
-    const findings = parseFindings(block);
+    const allFindings = parseFindings(block);
+    const findings = fullAccess ? allFindings : allFindings.slice(0, 1);
     const critCnt  = findings.filter(f => f.type === 'critical').length;
 
     const barColor = secScore == null  ? 'var(--text-dim)'
@@ -1339,7 +1376,9 @@ function renderReport(evt) {
                    : secScore >= 50    ? 'var(--amber)'
                    : 'var(--red)';
 
-    const subText = critCnt > 0
+    const subText = !fullAccess
+      ? `Sample preview${allFindings.length > findings.length ? ' · More in full report' : ''}`
+      : critCnt > 0
       ? `${critCnt} critical issue${critCnt > 1 ? 's' : ''}`
       : `${findings.length} finding${findings.length !== 1 ? 's' : ''}`;
 
@@ -1385,14 +1424,14 @@ function renderReport(evt) {
       </div>
       <div class="sec-report-body">
         <div style="margin-bottom:0.8rem;">${findingsHtml}</div>
-        <details style="margin-top:0.6rem;">
+        ${fullAccess ? `<details style="margin-top:0.6rem;">
           <summary style="font-size:0.75rem;color:var(--text-muted);cursor:pointer;">
             ▸ Full stage text
           </summary>
           <div style="margin-top:0.5rem;padding:0.7rem;background:var(--surface2);border-radius:8px;max-height:300px;overflow-y:auto;">
             ${stageLines}
           </div>
-        </details>
+        </details>` : `<div style="font-size:0.78rem;color:var(--text-muted);">🔒 Full stage text is available after payment.</div>`}
       </div>`;
     reportsEl.appendChild(div);
   }
@@ -1400,6 +1439,7 @@ function renderReport(evt) {
   // ── Download button ────────────────────────────────────────────────────
   const dlBtn = document.getElementById('downloadBtn');
   dlBtn.style.display = 'inline-flex';
+  updatePrintAccess();
 
   if (evt.gcs_url) {
     const cBtn = document.getElementById('cloudBtn');
@@ -1545,7 +1585,9 @@ function startQrPolling(orderId) {
         document.getElementById('qrStatusText').textContent = '✓ Payment received!';
         stopQrTimers();
         if (data.payment_id) sendInvoice(data.payment_id, orderId);
+        fullViewUnlocked = true;
         pendingOrderId = null;
+        if (latestDoneEvent) renderReport(latestDoneEvent);
         setTimeout(() => {
           document.getElementById('paymentModal').style.display = 'none';
           resetPaymentModal();
@@ -1619,6 +1661,8 @@ async function startPayment() {
         const vd = await v.json();
         document.getElementById('paymentModal').style.display = 'none';
         if (vd.verified) {
+          fullViewUnlocked = true;
+          if (latestDoneEvent) renderReport(latestDoneEvent);
           sendInvoice(response.razorpay_payment_id, response.razorpay_order_id);
           doFullDownload();
           setTimeout(() => doInvoiceDownload(), 800);
@@ -1681,6 +1725,8 @@ async function checkPaymentStatus() {
       pendingOrderId = null;
       document.getElementById('paymentModal').style.display = 'none';
       if (checkBtn) checkBtn.style.display = 'none';
+      fullViewUnlocked = true;
+      if (latestDoneEvent) renderReport(latestDoneEvent);
       if (data.payment_id) sendInvoice(data.payment_id, paidOrderId);
       doFullDownload();
       setTimeout(() => doInvoiceDownload(), 800);
@@ -1711,6 +1757,13 @@ function esc(s) {
     .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 function viewGuidelines() { window.open('/guidelines-page','_blank'); }
+function printReport() {
+  if (!hasFullViewAccess()) {
+    alert('Printing is available only after payment is completed.');
+    return;
+  }
+  window.print();
+}
 function copyReport() {
   const verdict   = document.getElementById('overallVerdict').textContent;
   const items     = [...document.querySelectorAll('.priority-item')];
@@ -1732,12 +1785,23 @@ function resetApp() {
     el.classList.remove('active','done');
   }
   hideError();
+  fullViewUnlocked = false;
+  latestDoneEvent = null;
+  updatePrintAccess();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 // ── CLOSE MODAL ON BACKDROP CLICK ─────────────────────────────────────────
 document.getElementById('paymentModal').addEventListener('click', function(e) {
   if (e.target === this) this.style.display = 'none';
+});
+
+window.addEventListener('keydown', (e) => {
+  const isPrintShortcut = (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p';
+  if (isPrintShortcut && !hasFullViewAccess()) {
+    e.preventDefault();
+    alert('Printing is available only after payment is completed.');
+  }
 });
 </script>
 </body>
