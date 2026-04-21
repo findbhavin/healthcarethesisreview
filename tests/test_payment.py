@@ -882,48 +882,53 @@ class TestSendInvoice(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# /payment/create-qr  and  /payment/check-qr  (UPI QR-code payment)
+# /payment/mobile/<order_id>  (QR scan-to-pay mobile page)
 # ---------------------------------------------------------------------------
 
-class TestPaymentQrCode(unittest.TestCase):
+class TestPaymentMobilePage(unittest.TestCase):
 
     def setUp(self):
         app.config["TESTING"] = True
         self.client = app.test_client()
         _review_store[DUMMY_REVIEW_ID] = dict(DUMMY_REVIEW)
+        _review_store[DUMMY_REVIEW_ID]["pending_order_id"] = DUMMY_ORDER_ID
 
     def tearDown(self):
         _review_store.pop(DUMMY_REVIEW_ID, None)
 
-    def test_create_qr_disabled_returns_503(self):
+    def test_mobile_page_disabled_returns_503(self):
         import app as app_module
         with patch.object(app_module, "PAYMENT_ENABLED", False):
-            resp = self.client.post(
-                "/payment/create-qr",
-                data=json.dumps({"review_id": DUMMY_REVIEW_ID}),
-                content_type="application/json",
-            )
+            resp = self.client.get(f"/payment/mobile/{DUMMY_ORDER_ID}")
         self.assertEqual(resp.status_code, 503)
 
-    def test_create_qr_invalid_review_returns_400(self):
+    def test_mobile_page_returns_html_with_order_id(self):
         import app as app_module
-        with patch.object(app_module, "PAYMENT_ENABLED", True):
-            resp = self.client.post(
-                "/payment/create-qr",
-                data=json.dumps({"review_id": "nonexistent"}),
-                content_type="application/json",
-            )
-        self.assertEqual(resp.status_code, 400)
+        with patch.object(app_module, "PAYMENT_ENABLED", True), \
+             patch.object(app_module, "RAZORPAY_KEY_ID", TEST_KEY_ID):
+            resp = self.client.get(f"/payment/mobile/{DUMMY_ORDER_ID}")
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn(b"<!DOCTYPE html>", resp.data)
+        self.assertIn(DUMMY_ORDER_ID.encode(), resp.data)
+        self.assertIn(b"checkout.razorpay.com", resp.data)
 
-    def test_create_qr_valid_returns_qr_data(self):
+    def test_mobile_page_includes_review_id(self):
+        import app as app_module
+        with patch.object(app_module, "PAYMENT_ENABLED", True), \
+             patch.object(app_module, "RAZORPAY_KEY_ID", TEST_KEY_ID):
+            resp = self.client.get(f"/payment/mobile/{DUMMY_ORDER_ID}")
+        self.assertIn(DUMMY_REVIEW_ID.encode(), resp.data)
+
+    def test_create_order_stores_pending_order_id(self):
+        """create-order should store pending_order_id on the review for the mobile page."""
         from unittest.mock import MagicMock
-        fake_qr = {
-            "id": "qr_TestQR123",
-            "image_url": "https://rzp.io/i/qr_image.png",
-            "status": "active",
+        fake_order = {
+            "id": "order_newQR999",
+            "amount": 5_000,
+            "currency": "INR",
         }
         fake_resp = MagicMock()
-        fake_resp.read.return_value = json.dumps(fake_qr).encode()
+        fake_resp.read.return_value = json.dumps(fake_order).encode()
         fake_resp.__enter__ = lambda s: s
         fake_resp.__exit__ = lambda *a: False
 
@@ -931,80 +936,14 @@ class TestPaymentQrCode(unittest.TestCase):
         with patch.object(app_module, "PAYMENT_ENABLED", True), \
              patch.object(app_module, "RAZORPAY_KEY_ID", TEST_KEY_ID), \
              patch.object(app_module, "RAZORPAY_KEY_SECRET", TEST_KEY_SECRET), \
-             patch("urllib.request.urlopen", return_value=fake_resp):
+             patch.object(app_module, "_create_razorpay_order", return_value=fake_order):
             resp = self.client.post(
-                "/payment/create-qr",
+                "/payment/create-order",
                 data=json.dumps({"review_id": DUMMY_REVIEW_ID}),
                 content_type="application/json",
             )
-
         self.assertEqual(resp.status_code, 200)
-        data = json.loads(resp.data)
-        self.assertEqual(data["qr_id"], "qr_TestQR123")
-        self.assertEqual(data["image_url"], "https://rzp.io/i/qr_image.png")
-        self.assertEqual(data["amount"], 5_000)
-
-    def test_check_qr_missing_fields_returns_400(self):
-        import app as app_module
-        with patch.object(app_module, "PAYMENT_ENABLED", True):
-            resp = self.client.post(
-                "/payment/check-qr",
-                data=json.dumps({}),
-                content_type="application/json",
-            )
-        self.assertEqual(resp.status_code, 400)
-
-    def test_check_qr_captured_payment_marks_review_paid(self):
-        from unittest.mock import MagicMock
-        fake_body = json.dumps({
-            "items": [{"id": "pay_QrCapture", "status": "captured"}],
-            "count": 1,
-        }).encode()
-        fake_resp = MagicMock()
-        fake_resp.read.return_value = fake_body
-        fake_resp.__enter__ = lambda s: s
-        fake_resp.__exit__ = lambda *a: False
-
-        import app as app_module
-        with patch.object(app_module, "PAYMENT_ENABLED", True), \
-             patch.object(app_module, "RAZORPAY_KEY_ID", TEST_KEY_ID), \
-             patch.object(app_module, "RAZORPAY_KEY_SECRET", TEST_KEY_SECRET), \
-             patch("urllib.request.urlopen", return_value=fake_resp):
-            resp = self.client.post(
-                "/payment/check-qr",
-                data=json.dumps({"qr_id": "qr_abc", "review_id": DUMMY_REVIEW_ID}),
-                content_type="application/json",
-            )
-
-        self.assertEqual(resp.status_code, 200)
-        data = json.loads(resp.data)
-        self.assertTrue(data["paid"])
-        self.assertEqual(data["payment_id"], "pay_QrCapture")
-        self.assertTrue(_review_store[DUMMY_REVIEW_ID].get("payment_verified"))
-        self.assertIn("invoice", _review_store[DUMMY_REVIEW_ID])
-
-    def test_check_qr_no_payment_returns_not_paid(self):
-        from unittest.mock import MagicMock
-        fake_body = json.dumps({"items": [], "count": 0}).encode()
-        fake_resp = MagicMock()
-        fake_resp.read.return_value = fake_body
-        fake_resp.__enter__ = lambda s: s
-        fake_resp.__exit__ = lambda *a: False
-
-        import app as app_module
-        with patch.object(app_module, "PAYMENT_ENABLED", True), \
-             patch.object(app_module, "RAZORPAY_KEY_ID", TEST_KEY_ID), \
-             patch.object(app_module, "RAZORPAY_KEY_SECRET", TEST_KEY_SECRET), \
-             patch("urllib.request.urlopen", return_value=fake_resp):
-            resp = self.client.post(
-                "/payment/check-qr",
-                data=json.dumps({"qr_id": "qr_abc", "review_id": DUMMY_REVIEW_ID}),
-                content_type="application/json",
-            )
-
-        self.assertEqual(resp.status_code, 200)
-        data = json.loads(resp.data)
-        self.assertFalse(data["paid"])
+        self.assertEqual(_review_store[DUMMY_REVIEW_ID].get("pending_order_id"), "order_newQR999")
 
 
 if __name__ == "__main__":

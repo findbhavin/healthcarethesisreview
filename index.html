@@ -751,7 +751,7 @@ body {
       </div>
       <div id="qrContent" style="display:none">
         <div style="background:white;padding:14px;border-radius:10px;margin:1rem auto;max-width:260px;box-shadow:0 4px 20px rgba(0,201,177,0.15)">
-          <img id="qrImage" src="" alt="UPI QR Code" style="width:100%;height:auto;display:block" />
+          <canvas id="qrCanvas" style="width:100%;height:auto;display:block"></canvas>
         </div>
         <div id="qrStatus" style="color:var(--teal);font-size:0.9rem;margin-bottom:0.6rem">
           <span id="qrStatusText">⌛ Waiting for payment…</span>
@@ -1426,7 +1426,42 @@ function sendInvoice(paymentId, orderId) {
   }).catch(() => {});
 }
 
-// ── QR CODE PAYMENT (UPI — scan from laptop with phone) ──────────────────
+// ── QR CODE PAYMENT (scan from laptop — opens payment page on phone) ─────
+// Uses the existing /payment/create-order to make a standard Razorpay order,
+// then generates a QR code client-side that links to /payment/mobile/<order_id>.
+// When scanned, the phone opens Razorpay Checkout.  The laptop polls
+// /payment/check-order to detect completion automatically.
+let _qrLibLoaded = false;
+function loadQrLib() {
+  return new Promise((resolve, reject) => {
+    if (_qrLibLoaded && window.qrcode) { resolve(); return; }
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js';
+    s.onload = () => { _qrLibLoaded = true; resolve(); };
+    s.onerror = () => reject(new Error('Failed to load QR library'));
+    document.head.appendChild(s);
+  });
+}
+
+function renderQrToCanvas(canvas, text) {
+  const qr = qrcode(0, 'M');
+  qr.addData(text);
+  qr.make();
+  const count = qr.getModuleCount();
+  const cellSize = Math.max(4, Math.floor(232 / count));
+  const pad = 4;
+  const total = count * cellSize + pad * 2 * cellSize;
+  canvas.width = total; canvas.height = total;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, total, total);
+  ctx.fillStyle = '#000000';
+  for (let r = 0; r < count; r++)
+    for (let c = 0; c < count; c++)
+      if (qr.isDark(r, c))
+        ctx.fillRect((c + pad) * cellSize, (r + pad) * cellSize, cellSize, cellSize);
+}
+
 async function showQrView() {
   if (!paymentConfig || !paymentConfig.enabled) { skipPaymentAndDownload(); return; }
   if (!currentReviewId) { alert('Please run a review first.'); return; }
@@ -1438,21 +1473,27 @@ async function showQrView() {
   document.getElementById('qrError').style.display = 'none';
 
   try {
-    const res = await fetch('/payment/create-qr', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ review_id: currentReviewId }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'QR creation failed');
-    if (!data.image_url) throw new Error('No QR image returned from gateway');
+    // Load QR library + create Razorpay order in parallel
+    const [, orderRes] = await Promise.all([
+      loadQrLib(),
+      fetch('/payment/create-order', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ review_id: currentReviewId }),
+      }),
+    ]);
+    const data = await orderRes.json();
+    if (!orderRes.ok) throw new Error(data.error || 'Order creation failed');
 
-    currentQrId = data.qr_id;
-    document.getElementById('qrImage').src = data.image_url;
+    pendingOrderId = data.order_id;
+    const payUrl = location.origin + '/payment/mobile/' + data.order_id;
+    renderQrToCanvas(document.getElementById('qrCanvas'), payUrl);
+
     document.getElementById('qrLoading').style.display = 'none';
     document.getElementById('qrContent').style.display = '';
 
-    startQrExpiryCountdown(data.expires_at);
-    startQrPolling();
+    const expiresAt = Math.floor(Date.now() / 1000) + 1800;
+    startQrExpiryCountdown(expiresAt);
+    startQrPolling(data.order_id);
   } catch (e) {
     document.getElementById('qrLoading').style.display = 'none';
     const errEl = document.getElementById('qrError');
@@ -1461,28 +1502,29 @@ async function showQrView() {
   }
 }
 
-function startQrPolling() {
+function startQrPolling(orderId) {
   if (qrPollInterval) clearInterval(qrPollInterval);
   qrPollInterval = setInterval(async () => {
-    if (!currentQrId || !currentReviewId) return;
+    if (!orderId || !currentReviewId) return;
     try {
-      const res = await fetch('/payment/check-qr', {
+      const res = await fetch('/payment/check-order', {
         method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ qr_id: currentQrId, review_id: currentReviewId }),
+        body: JSON.stringify({ order_id: orderId, review_id: currentReviewId }),
       });
       const data = await res.json();
       if (data.paid) {
         document.getElementById('qrStatusText').textContent = '✓ Payment received!';
         stopQrTimers();
-        if (data.payment_id && currentQrId) sendInvoice(data.payment_id, currentQrId);
+        if (data.payment_id) sendInvoice(data.payment_id, orderId);
+        pendingOrderId = null;
         setTimeout(() => {
           document.getElementById('paymentModal').style.display = 'none';
           resetPaymentModal();
           doDownload();
         }, 1200);
       }
-    } catch (_) { /* keep polling; transient errors are fine */ }
-  }, 3000);
+    } catch (_) {}
+  }, 4000);
 }
 
 function startQrExpiryCountdown(expiresAtUnix) {
@@ -1508,6 +1550,7 @@ function stopQrTimers() {
 function cancelQrPayment() {
   stopQrTimers();
   currentQrId = null;
+  pendingOrderId = null;
   resetPaymentModal();
 }
 

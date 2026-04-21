@@ -685,6 +685,7 @@ def payment_create_order():
                 "product": "Peer Review PDF Download",
             },
         )
+        _review_store[review_id]["pending_order_id"] = order["id"]
         logger.info(f"Razorpay order created: {order['id']} for review {review_id}")
         return jsonify({
             "order_id": order["id"],
@@ -821,151 +822,121 @@ def payment_check_order():
 
 
 # ---------------------------------------------------------------------------
-# QR Code payment (UPI — scan with GPay/PhonePe/any UPI app from laptop)
+# QR Code payment — mobile payment page for scan-to-pay from laptop
 # ---------------------------------------------------------------------------
+# Instead of the Razorpay QR Codes API (which needs separate activation),
+# we create a standard Razorpay order and serve a lightweight mobile payment
+# page at /payment/mobile/<order_id>.  The laptop generates a QR code
+# client-side pointing to this URL.  When the user scans with their phone,
+# Razorpay Checkout opens on the phone.  The laptop polls /payment/check-order
+# to detect completion automatically.
 
-RAZORPAY_QR_URL = "https://api.razorpay.com/v1/payments/qr_codes"
 
-
-@app.route("/payment/create-qr", methods=["POST"])
-def payment_create_qr():
+@app.route("/payment/mobile/<order_id>", methods=["GET"])
+def payment_mobile_page(order_id: str):
     """
-    Create a Razorpay UPI QR code so the user can scan it with any UPI app
-    (GPay, PhonePe, Paytm, BHIM) to pay from a laptop.
-
-    QR codes are single-use and expire after 30 minutes.  UPI is India-only —
-    international users should use the card/wallet option in the standard
-    Razorpay Checkout popup.
-
-    JSON body: {"review_id": "..."}
-    Returns:   {"qr_id", "image_url", "amount", "currency", "expires_at"}
-    """
-    if not PAYMENT_ENABLED:
-        return jsonify({"error": "Payment gateway not configured."}), 503
-
-    data = request.get_json(silent=True) or {}
-    review_id = data.get("review_id", "")
-    if not review_id or review_id not in _review_store:
-        return jsonify({"error": "Invalid or expired review ID."}), 400
-
-    import time
-    close_by = int(time.time()) + 1800  # 30 minutes from now
-
-    try:
-        auth_header = "Basic " + base64.b64encode(
-            f"{RAZORPAY_KEY_ID}:{RAZORPAY_KEY_SECRET}".encode()
-        ).decode()
-        payload = json.dumps({
-            "type": "upi_qr",
-            "name": "Health Care Expert Reviews",
-            "usage": "single_use",
-            "fixed_amount": True,
-            "payment_amount": PAYMENT_AMOUNT_PAISE,
-            "description": PAYMENT_DESCRIPTION,
-            "close_by": close_by,
-            "notes": {"review_id": review_id, "product": "Peer Review PDF"},
-        }).encode()
-        req = urllib.request.Request(
-            RAZORPAY_QR_URL,
-            data=payload,
-            headers={
-                "Authorization": auth_header,
-                "Content-Type": "application/json",
-                "User-Agent": "healthcarethesisreview/1.0",
-            },
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            qr = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        err_body = e.read().decode("utf-8", errors="replace")
-        logger.exception(f"Razorpay QR creation failed ({e.code}): {err_body}")
-        return jsonify({"error": f"QR creation failed: {err_body}"}), 500
-    except Exception as e:
-        logger.exception("Razorpay QR creation failed")
-        return jsonify({"error": f"QR creation failed: {e}"}), 500
-
-    _review_store[review_id]["pending_qr_id"] = qr["id"]
-    logger.info(f"QR code created: {qr['id']} for review {review_id}")
-    return jsonify({
-        "qr_id": qr["id"],
-        "image_url": qr.get("image_url", ""),
-        "amount": PAYMENT_AMOUNT_PAISE,
-        "currency": PAYMENT_CURRENCY,
-        "expires_at": close_by,
-        "review_id": review_id,
-    })
-
-
-@app.route("/payment/check-qr", methods=["POST"])
-def payment_check_qr():
-    """
-    Poll Razorpay to see if a QR code payment has been captured.
-    Called every few seconds by the frontend while the QR is displayed.
-
-    JSON body: {"qr_id": "qr_...", "review_id": "..."}
-    Returns:   {"paid": true/false, "review_id", "payment_id"?}
+    Lightweight mobile payment page opened by scanning the QR code.
+    Loads Razorpay Checkout and auto-opens the payment popup for the
+    given order_id.  After payment the phone verifies with /payment/verify
+    and the laptop (polling /payment/check-order) detects completion.
     """
     if not PAYMENT_ENABLED:
-        return jsonify({"error": "Payment gateway not configured."}), 503
+        return "<h2>Payment gateway not configured.</h2>", 503
 
-    data      = request.get_json(silent=True) or {}
-    qr_id     = data.get("qr_id", "")
-    review_id = data.get("review_id", "")
+    review_id = ""
+    for rid, entry in _review_store.items():
+        if entry.get("pending_order_id") == order_id:
+            review_id = rid
+            break
 
-    if not qr_id or not review_id:
-        return jsonify({"error": "Missing qr_id or review_id."}), 400
-    if review_id not in _review_store:
-        return jsonify({"error": "Invalid or expired review ID."}), 400
+    key_id   = RAZORPAY_KEY_ID
+    amount   = PAYMENT_AMOUNT_PAISE
+    currency = PAYMENT_CURRENCY
 
-    try:
-        auth_header = "Basic " + base64.b64encode(
-            f"{RAZORPAY_KEY_ID}:{RAZORPAY_KEY_SECRET}".encode()
-        ).decode()
-        url = f"https://api.razorpay.com/v1/payments/qr_codes/{qr_id}/payments"
-        req = urllib.request.Request(
-            url,
-            headers={
-                "Authorization": auth_header,
-                "User-Agent": "healthcarethesisreview/1.0",
-            },
-            method="GET",
-        )
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            payments = json.loads(resp.read().decode("utf-8"))
-    except Exception as e:
-        logger.exception("Failed to check QR payments")
-        return jsonify({"error": f"Could not check QR status: {e}"}), 500
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pay — Health Care Expert Reviews</title>
+<style>
+  body {{
+    font-family: system-ui, sans-serif;
+    background: #0f1117; color: #e8eaf0;
+    display: flex; align-items: center; justify-content: center;
+    min-height: 100vh; margin: 0; padding: 16px; text-align: center;
+  }}
+  .card {{
+    background: #181c27; border: 1px solid #2a3050;
+    border-radius: 16px; padding: 32px 24px; max-width: 400px; width: 100%;
+  }}
+  h1 {{ color: #00c9b1; font-size: 1.4rem; margin-bottom: 8px; }}
+  .amount {{ font-size: 2.2rem; font-weight: 700; color: #00c9b1; margin: 16px 0; }}
+  .btn {{
+    display: block; width: 100%;
+    background: #00c9b1; color: #0f1117;
+    border: none; border-radius: 10px;
+    padding: 16px; font-size: 17px; font-weight: 700;
+    cursor: pointer; margin-top: 20px;
+  }}
+  .btn:disabled {{ background: #2a3050; color: #7a8aa8; }}
+  .success {{ color: #3dd68c; font-size: 1.2rem; margin: 24px 0; }}
+  .info {{ color: #7a8aa8; font-size: 0.85rem; margin-top: 12px; }}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Health Care Expert Reviews</h1>
+  <p>AI Peer Review Report</p>
+  <div class="amount">&#8377;{amount // 100}</div>
+  <div id="status"></div>
+  <button class="btn" id="payBtn" onclick="openPayment()">Pay Now</button>
+  <p class="info">Secured by Razorpay &middot; You can close this page after payment</p>
+</div>
 
-    items = payments.get("items", [])
-    captured = [p for p in items if p.get("status") == "captured"]
-
-    if captured:
-        payment_id = captured[0]["id"]
-        invoice_id = f"INV-{review_id[:8]}-{payment_id[-6:]}"
-        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        _review_store[review_id]["payment_verified"] = True
-        _review_store[review_id]["order_id"] = qr_id
-        _review_store[review_id]["payment_id"] = payment_id
-        _review_store[review_id]["paid_at_utc"] = now_iso
-        _review_store[review_id]["invoice"] = {
-            "invoice_id": invoice_id,
-            "order_id": qr_id,
-            "payment_id": payment_id,
-            "amount_paise": PAYMENT_AMOUNT_PAISE,
-            "currency": PAYMENT_CURRENCY,
-            "description": PAYMENT_DESCRIPTION,
-            "paid_at_utc": now_iso,
-        }
-        logger.info(f"QR payment confirmed for review {review_id}, payment {payment_id}")
-        return jsonify({
-            "paid": True,
-            "review_id": review_id,
-            "payment_id": payment_id,
-            "invoice_download_url": f"/invoice/{review_id}",
-        })
-
-    return jsonify({"paid": False, "review_id": review_id})
+<script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+<script>
+function openPayment() {{
+  var btn = document.getElementById('payBtn');
+  btn.disabled = true; btn.textContent = 'Opening payment\\u2026';
+  var options = {{
+    key: '{key_id}',
+    amount: {amount},
+    currency: '{currency}',
+    name: 'Health Care Expert Reviews',
+    description: 'Peer Review PDF Download',
+    order_id: '{order_id}',
+    handler: function(response) {{
+      fetch('/payment/verify', {{
+        method: 'POST',
+        headers: {{'Content-Type': 'application/json'}},
+        body: JSON.stringify({{
+          razorpay_order_id: response.razorpay_order_id,
+          razorpay_payment_id: response.razorpay_payment_id,
+          razorpay_signature: response.razorpay_signature,
+          review_id: '{review_id}'
+        }})
+      }}).then(function(r) {{ return r.json(); }}).then(function(d) {{
+        if (d.verified) {{
+          document.getElementById('status').innerHTML =
+            '<div class="success">&#10003; Payment Successful!</div>' +
+            '<p>You can close this page. Your download will start automatically on the other device.</p>';
+          btn.style.display = 'none';
+        }}
+      }});
+    }},
+    modal: {{
+      ondismiss: function() {{ btn.disabled = false; btn.textContent = 'Pay Now'; }}
+    }},
+    theme: {{ color: '#00c9b1' }}
+  }};
+  new Razorpay(options).open();
+}}
+setTimeout(openPayment, 500);
+</script>
+</body>
+</html>"""
+    return html, 200, {"Content-Type": "text/html; charset=utf-8"}
 
 
 # ---------------------------------------------------------------------------
