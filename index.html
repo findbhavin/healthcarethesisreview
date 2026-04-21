@@ -1439,6 +1439,7 @@ function renderReport(evt) {
   // ── Download button ────────────────────────────────────────────────────
   const dlBtn = document.getElementById('downloadBtn');
   dlBtn.style.display = 'inline-flex';
+  dlBtn.textContent = fullViewUnlocked ? '📥 Download Full Report' : '📥 Download PDF Report';
   updatePrintAccess();
 
   if (evt.gcs_url) {
@@ -1471,7 +1472,9 @@ function initiateDownload() {
   }
 }
 function proceedAfterEmail() {
-  if (paymentConfig && paymentConfig.enabled) {
+  if (fullViewUnlocked) {
+    doFullDownload();
+  } else if (paymentConfig && paymentConfig.enabled) {
     document.getElementById('paymentModal').style.display = 'flex';
   } else {
     doSampleDownload();
