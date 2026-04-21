@@ -705,6 +705,14 @@ body {
       <button class="action-btn action-btn-primary" id="verifyOtpBtn" onclick="verifyOtp()" style="width:100%;margin-bottom:0.6rem">
         Verify &amp; Continue
       </button>
+      <div id="postVerifyActions" style="display:none">
+        <button class="action-btn action-btn-primary" onclick="payAndDownloadAfterVerification()" style="width:100%;margin-bottom:0.6rem">
+          Pay and Download Full Report
+        </button>
+        <button class="action-btn" onclick="downloadFreeAfterVerification()" style="width:100%;margin-bottom:0.6rem">
+          Download Free Report
+        </button>
+      </div>
       <button class="action-btn" onclick="backToEmailStep()" style="width:100%;margin-bottom:0.6rem">
         ← Change Email
       </button>
@@ -790,6 +798,8 @@ function showEmailModal() {
   document.getElementById('emailStep2').style.display = 'none';
   document.getElementById('emailError').textContent = '';
   document.getElementById('otpError').textContent = '';
+  document.getElementById('postVerifyActions').style.display = 'none';
+  document.getElementById('verifyOtpBtn').style.display = '';
   document.getElementById('emailInput').value = '';
   document.getElementById('otpInput').value = '';
   document.getElementById('emailStep1Dot').className = 'modal-step active';
@@ -847,8 +857,8 @@ async function verifyOtp() {
     }
     verifiedEmail = email;
     document.getElementById('emailStep2Dot').className = 'modal-step done';
-    document.getElementById('emailModal').style.display = 'none';
-    proceedAfterEmail();
+    document.getElementById('verifyOtpBtn').style.display = 'none';
+    document.getElementById('postVerifyActions').style.display = '';
   } catch (e) {
     errEl.textContent = 'Network error. Please try again.';
   } finally {
@@ -856,11 +866,23 @@ async function verifyOtp() {
   }
 }
 
+function downloadFreeAfterVerification() {
+  document.getElementById('emailModal').style.display = 'none';
+  doSampleDownload();
+}
+
+function payAndDownloadAfterVerification() {
+  document.getElementById('emailModal').style.display = 'none';
+  proceedAfterEmail();
+}
+
 function backToEmailStep() {
   document.getElementById('emailStep2').style.display = 'none';
   document.getElementById('emailStep1').style.display = '';
   document.getElementById('emailStep1Dot').className = 'modal-step active';
   document.getElementById('emailStep2Dot').className = 'modal-step';
+  document.getElementById('postVerifyActions').style.display = 'none';
+  document.getElementById('verifyOtpBtn').style.display = '';
   document.getElementById('otpInput').value = '';
   document.getElementById('otpError').textContent = '';
 }
