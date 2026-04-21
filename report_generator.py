@@ -1141,13 +1141,22 @@ def _build_sample_report(story: list, styles, review_result: dict, h2_style, bod
                 body_style,
             ))
     else:
-        story.append(Paragraph("Observations are available in the paid full report.", body_style))
+        story.append(Paragraph(
+            "1. <b>Overall observation</b> — A full section-wise evaluation is available and "
+            "includes actionable manuscript improvement points.",
+            body_style,
+        ))
+    story.append(Paragraph(
+        "The complete list of observations is included in the paid full report.",
+        body_style,
+    ))
 
     story.append(Spacer(1, 12))
     story.append(HRFlowable(width="100%", thickness=1, color=C_BLUE_LIGHT, spaceBefore=4, spaceAfter=8))
     story.append(Paragraph(
-        "<b>Call to Action:</b> Complete payment to download the full peer review report with "
-        "all stages, revision checklist, and manuscript-specific recommendations.",
+        "You can return to this web session before it expires and complete payment to access "
+        "the full peer review report with all stages, revision checklist, and "
+        "manuscript-specific recommendations.",
         notice_style,
     ))
     story.append(Paragraph(

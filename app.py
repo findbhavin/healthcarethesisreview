@@ -397,6 +397,7 @@ def review():
                     "weighted_score": result.get("weighted_score"),
                     "stage_scores": result.get("stage_scores", {}),
                     "wrs_parts": result.get("wrs_parts", ""),
+                    "payment_verified": _review_store[review_id].get("payment_verified", False),
                 }
                 if gcs_url:
                     payload["gcs_url"] = gcs_url
@@ -673,6 +674,7 @@ def poll_review(review_id: str):
             "weighted_score": entry.get("weighted_score"),
             "stage_scores": entry.get("stage_scores", {}),
             "wrs_parts": entry.get("wrs_parts", ""),
+            "payment_verified": entry.get("payment_verified", False),
         }
         if entry.get("gcs_url"):
             payload["gcs_url"] = entry["gcs_url"]
