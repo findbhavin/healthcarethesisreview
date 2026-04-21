@@ -11,7 +11,7 @@ GET  /health                    Health check (used by Cloud Run)
 POST /review                    Stream 8-stage AI peer review via SSE (text/event-stream)
 GET  /download/<review_id>      Download the PDF review report
 GET  /invoice/<review_id>       Download the payment invoice PDF (paid reviews)
-POST /payment/create-order      Create a Razorpay payment order (₹100 per document)
+POST /payment/create-order      Create a Razorpay payment order (configurable amount)
 POST /payment/verify            Verify Razorpay payment signature and mark review as paid
 GET  /guidelines/full           Return complete guidelines data (for UI)
 GET  /guidelines/metadata       Return current guidelines version/metadata
@@ -196,12 +196,13 @@ def _send_email(
 RAZORPAY_KEY_ID     = os.environ.get("RAZORPAY_KEY_ID", "")
 RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "")
 
-# Payment amount in paise (50 INR = 5000 paise)
-PAYMENT_AMOUNT_PAISE   = 5_000  # ₹50
+# Payment amount in paise (default 50 INR = 5000 paise, configurable)
+PAYMENT_AMOUNT_PAISE   = int(os.environ.get("PAYMENT_AMOUNT_PAISE", "5000"))
 PAYMENT_CURRENCY       = "INR"
-PAYMENT_DESCRIPTION    = "Peer Review Report Download — ₹50 per document"
+PAYMENT_DESCRIPTION    = "Peer Review Report Download"
 
 PAYMENT_ENABLED = bool(RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET)
+REVIEW_SESSION_TTL_MINUTES = int(os.environ.get("REVIEW_SESSION_TTL_MINUTES", "30"))
 
 RAZORPAY_ORDERS_URL = "https://api.razorpay.com/v1/orders"
 
@@ -249,6 +250,26 @@ def _create_razorpay_order(amount_paise: int, currency: str, receipt: str, notes
 
 def allowed_file(filename: str) -> bool:
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+def _amount_display() -> str:
+    if PAYMENT_CURRENCY == "INR":
+        return f"₹{PAYMENT_AMOUNT_PAISE / 100:,.0f}"
+    return f"{PAYMENT_CURRENCY} {PAYMENT_AMOUNT_PAISE / 100:,.2f}"
+
+
+def _is_review_expired(entry: dict | None) -> bool:
+    if not entry:
+        return True
+    created_at = entry.get("created_at_utc")
+    if not created_at:
+        return False
+    try:
+        created = datetime.datetime.fromisoformat(created_at)
+        expiry = created + datetime.timedelta(minutes=REVIEW_SESSION_TTL_MINUTES)
+        return datetime.datetime.now(datetime.timezone.utc) > expiry
+    except (ValueError, TypeError):
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -336,6 +357,8 @@ def review():
         "status": "running",
         "accumulated_text": "",
         "filename": filename,
+        "created_at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "payment_verified": False,
     }
 
     def generate():
@@ -401,22 +424,37 @@ def review():
 
 @app.route("/download/<review_id>", methods=["GET"])
 def download_report(review_id: str):
-    """Download the PDF peer review report for a completed review."""
+    """Download sample (free) or full (paid) PDF report for a completed review."""
     result = _review_store.get(review_id)
     if not result:
         return jsonify({
             "error": "Review not found or expired. Please run the review again."
         }), 404
+    if _is_review_expired(result):
+        _review_store.pop(review_id, None)
+        return jsonify({
+            "error": "This review session has timed out. Please run the analysis again."
+        }), 410
+
+    download_tier = (request.args.get("tier") or "sample").strip().lower()
+    if download_tier not in {"sample", "full"}:
+        return jsonify({"error": "Invalid download tier."}), 400
+    if download_tier == "full" and not result.get("payment_verified"):
+        return jsonify({
+            "error": "Full report is available only after payment verification.",
+            "cta": "Please complete payment to unlock full download.",
+        }), 402
 
     try:
-        pdf_bytes = generate_report(result)
+        pdf_bytes = generate_report(result, sample_only=(download_tier == "sample"))
         safe_title = (
             result.get("manuscript_title", "review")[:40]
             .replace(" ", "_")
             .replace("/", "-")
             .replace("\\", "-")
         )
-        download_name = f"PeerReview_{safe_title}.pdf"
+        suffix = "Sample" if download_tier == "sample" else "Full"
+        download_name = f"PeerReview_{suffix}_{safe_title}.pdf"
         return send_file(
             io.BytesIO(pdf_bytes),
             mimetype="application/pdf",
@@ -434,6 +472,9 @@ def download_invoice(review_id: str):
     result = _review_store.get(review_id)
     if not result:
         return jsonify({"error": "Review not found or expired."}), 404
+    if _is_review_expired(result):
+        _review_store.pop(review_id, None)
+        return jsonify({"error": "This review session has timed out. Please run the analysis again."}), 410
 
     if not result.get("payment_verified"):
         return jsonify({"error": "Invoice is available only after successful payment verification."}), 402
@@ -546,6 +587,9 @@ def email_send_pdf():
     result = _review_store.get(review_id)
     if not result:
         return jsonify({"error": "Review not found."}), 404
+    if _is_review_expired(result):
+        _review_store.pop(review_id, None)
+        return jsonify({"error": "Review session timed out. Please run the analysis again."}), 410
 
     try:
         pdf_bytes   = generate_report(result)
@@ -654,8 +698,9 @@ def payment_config():
         "amount": PAYMENT_AMOUNT_PAISE,
         "currency": PAYMENT_CURRENCY,
         "description": PAYMENT_DESCRIPTION,
-        "amount_display": "₹50",
+        "amount_display": _amount_display(),
         "email_enabled": EMAIL_ENABLED,
+        "session_ttl_minutes": REVIEW_SESSION_TTL_MINUTES,
     })
 
 
@@ -674,6 +719,9 @@ def payment_create_order():
     review_id = data.get("review_id", "")
     if not review_id or review_id not in _review_store:
         return jsonify({"error": "Invalid or expired review ID."}), 400
+    if _is_review_expired(_review_store.get(review_id)):
+        _review_store.pop(review_id, None)
+        return jsonify({"error": "Review session timed out. Please run the analysis again."}), 410
 
     try:
         order = _create_razorpay_order(
@@ -724,6 +772,9 @@ def payment_verify():
 
     if not all([order_id, payment_id, signature, review_id]):
         return jsonify({"error": "Missing payment verification fields."}), 400
+    if _is_review_expired(_review_store.get(review_id)):
+        _review_store.pop(review_id, None)
+        return jsonify({"error": "Review session timed out. Please run the analysis again."}), 410
 
     # Verify HMAC-SHA256 signature: key=secret, msg=order_id|payment_id
     expected = hmac.new(
@@ -786,6 +837,9 @@ def payment_check_order():
 
     if review_id not in _review_store:
         return jsonify({"error": "Invalid or expired review ID."}), 400
+    if _is_review_expired(_review_store.get(review_id)):
+        _review_store.pop(review_id, None)
+        return jsonify({"error": "Review session timed out. Please run the analysis again."}), 410
 
     # Query Razorpay for payments against this order
     try:

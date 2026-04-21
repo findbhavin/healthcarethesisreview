@@ -63,7 +63,8 @@ def generate_invoice(
 
     pay_date = payment_date or datetime.now(timezone.utc)
     amount_display = f"{amount_paise / 100:,.2f}"
-    currency_symbol = "\u20b9" if currency == "INR" else currency + " "
+    # Helvetica in some PDF viewers lacks ₹ glyph; prefer ASCII-safe INR prefix.
+    currency_symbol = "Rs. " if currency == "INR" else currency + " "
 
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
