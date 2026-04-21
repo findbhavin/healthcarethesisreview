@@ -1082,7 +1082,82 @@ def _build_concluding_remarks(review_result: dict, story: list, styles,
     ))
 
 
-def generate_report(review_result: dict) -> bytes:
+def _build_sample_report(story: list, styles, review_result: dict, h2_style, body_style) -> None:
+    """Build a teaser/sample report with score summary and limited observations."""
+    score = review_result.get("weighted_score")
+    score_text = f"{score}/100" if score is not None else "Not available"
+    decision = review_result.get("decision", "See full report")
+    manuscript_title = review_result.get("manuscript_title", "—")
+
+    notice_style = ParagraphStyle(
+        "SampleNotice", parent=styles["Normal"],
+        fontSize=10, leading=15, textColor=C_DARK,
+    )
+    card_label = ParagraphStyle(
+        "SampleCardLabel", parent=styles["Normal"],
+        fontSize=9, fontName="Helvetica-Bold", textColor=C_BLUE,
+    )
+    card_val = ParagraphStyle(
+        "SampleCardVal", parent=styles["Normal"],
+        fontSize=11, fontName="Helvetica-Bold", textColor=C_DARK,
+    )
+
+    story.append(Paragraph("Sample Preview Report", h2_style))
+    story.append(Paragraph(
+        "This free preview includes only a score snapshot and selected observations. "
+        "Download the paid full report to unlock stage-wise analysis, detailed revisions, "
+        "guideline appendix, and complete recommendations.",
+        notice_style,
+    ))
+    story.append(Spacer(1, 10))
+
+    summary_tbl = Table(
+        [
+            [Paragraph("Manuscript", card_label), Paragraph(_esc(manuscript_title), card_val)],
+            [Paragraph("Weighted Review Score", card_label), Paragraph(_esc(score_text), card_val)],
+            [Paragraph("Editorial Decision", card_label), Paragraph(_esc(decision), card_val)],
+        ],
+        colWidths=[5 * cm, 10.5 * cm],
+    )
+    summary_tbl.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (0, -1), C_BLUE_LIGHT),
+        ("BACKGROUND", (1, 0), (1, -1), C_BLUE_BG),
+        ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#B0C8E0")),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("TOPPADDING", (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+    ]))
+    story.append(summary_tbl)
+    story.append(Spacer(1, 12))
+
+    story.append(Paragraph("Major Observations (Preview)", h2_style))
+    items = [i for i in _extract_revision_items(review_result.get("review_text", "")) if i["priority"] == "MAJOR"][:2]
+    if not items:
+        items = _extract_revision_items(review_result.get("review_text", ""))[:2]
+    if items:
+        for idx, item in enumerate(items, 1):
+            story.append(Paragraph(
+                f"{idx}. <b>{_esc(item['section'])}</b> — {_esc(item['comment'])}",
+                body_style,
+            ))
+    else:
+        story.append(Paragraph("Observations are available in the paid full report.", body_style))
+
+    story.append(Spacer(1, 12))
+    story.append(HRFlowable(width="100%", thickness=1, color=C_BLUE_LIGHT, spaceBefore=4, spaceAfter=8))
+    story.append(Paragraph(
+        "<b>Call to Action:</b> Complete payment to download the full peer review report with "
+        "all stages, revision checklist, and manuscript-specific recommendations.",
+        notice_style,
+    ))
+    story.append(Paragraph(
+        "This review session is temporary. If your session times out, you will need to run "
+        "the analysis again before downloading.",
+        ParagraphStyle("SampleTimeout", parent=styles["Normal"], fontSize=9, textColor=C_GREY),
+    ))
+
+
+def generate_report(review_result: dict, sample_only: bool = False) -> bytes:
     """
     Generate a PDF report from the review_result dict produced by run_review().
     Returns raw bytes of the PDF.
@@ -1196,6 +1271,12 @@ def generate_report(review_result: dict) -> bytes:
     story.append(HRFlowable(width="100%", thickness=0.8, color=C_BLUE_LIGHT, spaceAfter=8))
     scorecard_items = _build_scorecard(review_result, styles)
     story.extend(scorecard_items)
+
+    if sample_only:
+        _build_sample_report(story, styles, review_result, h2_style, body_style)
+        doc.build(story, onFirstPage=_draw_page_footer, onLaterPages=_draw_page_footer)
+        buf.seek(0)
+        return buf.read()
 
     # ── Guidelines Applied appendix ────────────────────────────────────────
     story.append(HRFlowable(width="100%", thickness=1, color=C_BLUE_LIGHT, spaceBefore=16, spaceAfter=8))

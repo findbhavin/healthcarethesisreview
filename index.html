@@ -651,7 +651,7 @@ body {
   <!-- Download bar -->
   <div class="download-bar">
     <button class="action-btn action-btn-download" id="downloadBtn" onclick="initiateDownload()" style="display:none;">
-      📥 Download Full PDF Report &amp; Author Revision Form
+      📥 Download Free Sample PDF
     </button>
     <button class="action-btn action-btn-download" id="cloudBtn" onclick="downloadFromCloud()" style="display:none;">
       ☁️ Download from Cloud Storage
@@ -722,29 +722,30 @@ body {
     <div id="paymentChoiceView">
       <div style="font-size:2rem;margin-bottom:0.5rem;">💳</div>
       <h2>Support This Service</h2>
-      <p>Would you like to make a small contribution to help sustain this peer review service? Paying is entirely optional.</p>
+      <p>Free download gives a sample preview only. Pay to unlock the complete peer review PDF.</p>
       <div class="price-badge">
-        ₹50
+        <span id="paymentAmountBadge">₹50</span>
         <small>~$0.60 USD · Cards (Visa/Mastercard/Amex) accepted worldwide</small>
       </div>
       <div class="modal-actions">
         <button class="action-btn action-btn-primary" id="payBtn" onclick="startPayment()">
-          💳 Pay by Card / UPI / Netbanking
+          💳 Pay &amp; Download Full Report
         </button>
         <button class="action-btn" id="qrBtn" onclick="showQrView()">
           📷 Scan QR Code (GPay / PhonePe / BHIM)
         </button>
         <button class="action-btn" onclick="skipPaymentAndDownload()">
-          Download Free
+          Download Free Sample
         </button>
       </div>
       <p class="modal-secure">🔒 Secured by Razorpay · International cards supported · UPI QR for India</p>
+      <p class="modal-hint">⏳ Report sessions expire after a timeout. If expired, you will need to re-run analysis.</p>
     </div>
 
     <!-- QR code view (shown when user chooses scan-to-pay) -->
     <div id="paymentQrView" style="display:none">
       <div style="font-size:2rem;margin-bottom:0.5rem;">📱</div>
-      <h2>Scan to Pay ₹50</h2>
+      <h2 id="scanPayTitle">Scan to Pay ₹50</h2>
       <p style="margin-bottom:0.8rem">Open <strong>GPay, PhonePe, Paytm</strong> or any UPI app on your phone and scan this QR code.</p>
       <div id="qrLoading" style="padding:2rem;color:var(--text-muted)">
         <div style="font-size:1.2rem">⏳ Generating QR code…</div>
@@ -884,6 +885,11 @@ async function loadPaymentConfig() {
     const res = await fetch('/payment/config');
     if (res.ok) {
       paymentConfig = await res.json();
+      const amount = paymentConfig.amount_display || '₹50';
+      const badge = document.getElementById('paymentAmountBadge');
+      const title = document.getElementById('scanPayTitle');
+      if (badge) badge.textContent = amount;
+      if (title) title.textContent = `Scan to Pay ${amount}`;
       if (paymentConfig.enabled && !razorpayLoaded) {
         const s = document.createElement('script');
         s.src = 'https://checkout.razorpay.com/v1/checkout.js';
@@ -1406,14 +1412,15 @@ function proceedAfterEmail() {
   if (paymentConfig && paymentConfig.enabled) {
     document.getElementById('paymentModal').style.display = 'flex';
   } else {
-    doDownload();
+    doSampleDownload();
   }
 }
-function doDownload() { window.location.href = '/download/' + currentReviewId; }
+function doSampleDownload() { window.location.href = '/download/' + currentReviewId + '?tier=sample'; }
+function doFullDownload() { window.location.href = '/download/' + currentReviewId + '?tier=full'; }
 function doInvoiceDownload() { window.location.href = '/invoice/' + currentReviewId; }
 function skipPaymentAndDownload() {
   document.getElementById('paymentModal').style.display = 'none';
-  doDownload();
+  doSampleDownload();
 }
 function sendInvoice(paymentId, orderId) {
   if (!verifiedEmail || !currentReviewId) return;
@@ -1520,7 +1527,7 @@ function startQrPolling(orderId) {
         setTimeout(() => {
           document.getElementById('paymentModal').style.display = 'none';
           resetPaymentModal();
-          doDownload();
+          doFullDownload();
         }, 1200);
       }
     } catch (_) {}
@@ -1591,10 +1598,10 @@ async function startPayment() {
         document.getElementById('paymentModal').style.display = 'none';
         if (vd.verified) {
           sendInvoice(response.razorpay_payment_id, response.razorpay_order_id);
-          doDownload();
+          doFullDownload();
           setTimeout(() => doInvoiceDownload(), 800);
         }
-        else alert('Payment verification failed. Please download free.');
+        else alert('Payment verification failed. You can still download the free sample.');
       },
       theme: { color: '#00c9b1' },
       modal: { ondismiss: () => {
@@ -1605,7 +1612,7 @@ async function startPayment() {
     rzp.open();
   } catch (e) {
     modal.style.display = 'flex';
-    btn.disabled = false; btn.textContent = '🔒 Pay ₹50 & Download';
+    btn.disabled = false; btn.textContent = '🔒 Pay & Download Full Report';
     alert('Payment error: ' + e.message);
   }
 }
@@ -1620,7 +1627,7 @@ function showPaymentFallback(modal, btn) {
   if (pendingOrderId) {
     // Payment may have completed in GPay but callback was lost —
     // show a "Check Payment Status" button alongside the retry option.
-    btn.disabled = false; btn.textContent = '🔒 Pay ₹50 & Download';
+    btn.disabled = false; btn.textContent = '🔒 Pay & Download Full Report';
     let checkBtn = document.getElementById('checkPaymentBtn');
     if (!checkBtn) {
       checkBtn = document.createElement('button');
@@ -1633,7 +1640,7 @@ function showPaymentFallback(modal, btn) {
     }
     checkBtn.style.display = '';
   } else {
-    btn.disabled = false; btn.textContent = '🔒 Pay ₹50 & Download';
+    btn.disabled = false; btn.textContent = '🔒 Pay & Download Full Report';
   }
 }
 
@@ -1653,7 +1660,7 @@ async function checkPaymentStatus() {
       document.getElementById('paymentModal').style.display = 'none';
       if (checkBtn) checkBtn.style.display = 'none';
       if (data.payment_id) sendInvoice(data.payment_id, paidOrderId);
-      doDownload();
+      doFullDownload();
       setTimeout(() => doInvoiceDownload(), 800);
     } else {
       checkBtn.textContent = 'Payment not found yet — try again in a moment';

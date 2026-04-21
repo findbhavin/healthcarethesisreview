@@ -8,6 +8,7 @@ import sys
 import os
 import io
 import json
+import datetime
 import unittest
 from unittest.mock import patch, MagicMock
 
@@ -279,6 +280,34 @@ class TestReviewRoute(unittest.TestCase):
         error_events = [e for e in events if e.get("type") == "error"]
         self.assertEqual(len(error_events), 1)
         self.assertIn("GEMINI_API_KEY", error_events[0]["error"])
+
+
+class TestDownloadAccessControl(unittest.TestCase):
+
+    def setUp(self):
+        app.config["TESTING"] = True
+        self.client = app.test_client()
+        self.review_id = "download-access-test-1"
+        _review_store[self.review_id] = {
+            **SAMPLE_REVIEW_RESULT,
+            "status": "done",
+            "payment_verified": False,
+            "created_at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        }
+
+    def tearDown(self):
+        _review_store.pop(self.review_id, None)
+
+    def test_sample_download_is_available_without_payment(self):
+        resp = self.client.get(f"/download/{self.review_id}?tier=sample")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.mimetype, "application/pdf")
+
+    def test_full_download_requires_payment(self):
+        resp = self.client.get(f"/download/{self.review_id}?tier=full")
+        self.assertEqual(resp.status_code, 402)
+        data = json.loads(resp.data)
+        self.assertIn("error", data)
 
 
 class TestDownloadRoute(unittest.TestCase):
