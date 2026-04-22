@@ -110,11 +110,11 @@ class TestPaymentConfig(unittest.TestCase):
         for field in ("enabled", "key_id", "amount", "currency", "description", "amount_display"):
             self.assertIn(field, data, f"Missing field: {field}")
 
-    def test_config_amount_is_5000_paise(self):
-        """₹50 = 5000 paise."""
+    def test_config_amount_is_1000_paise(self):
+        """₹10 = 1000 paise."""
         resp = self.client.get("/payment/config")
         data = json.loads(resp.data)
-        self.assertEqual(data["amount"], 5_000)
+        self.assertEqual(data["amount"], 1_000)
 
     def test_config_currency_is_inr(self):
         resp = self.client.get("/payment/config")
@@ -174,7 +174,7 @@ class TestPaymentCreateOrder(unittest.TestCase):
         """Mock _create_razorpay_order to return a fake order."""
         mock_order = {
             "id": DUMMY_ORDER_ID,
-            "amount": 5_000,
+            "amount": 1_000,
             "currency": "INR",
         }
 
@@ -192,7 +192,7 @@ class TestPaymentCreateOrder(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         data = json.loads(resp.data)
         self.assertEqual(data["order_id"], DUMMY_ORDER_ID)
-        self.assertEqual(data["amount"], 5_000)
+        self.assertEqual(data["amount"], 1_000)
         self.assertEqual(data["currency"], "INR")
         self.assertEqual(data["review_id"], DUMMY_REVIEW_ID)
         self.assertIn("key_id", data)
@@ -236,7 +236,7 @@ class TestCreateRazorpayOrderHelper(unittest.TestCase):
 
         fake_response_body = json.dumps({
             "id": "order_HELPERTEST",
-            "amount": 5_000,
+            "amount": 1_000,
             "currency": "INR",
             "receipt": "review_abc",
         }).encode()
@@ -260,7 +260,7 @@ class TestCreateRazorpayOrderHelper(unittest.TestCase):
              patch.object(app_module, "RAZORPAY_KEY_SECRET", "helpersecret"), \
              patch("urllib.request.urlopen", side_effect=fake_urlopen):
             result = app_module._create_razorpay_order(
-                amount_paise=5_000,
+                amount_paise=1_000,
                 currency="INR",
                 receipt="review_abc",
                 notes={"review_id": "abc"},
@@ -279,7 +279,7 @@ class TestCreateRazorpayOrderHelper(unittest.TestCase):
         self.assertEqual(lc_headers["authorization"], expected_auth)
 
         body = json.loads(captured["body"].decode())
-        self.assertEqual(body["amount"], 5_000)
+        self.assertEqual(body["amount"], 1_000)
         self.assertEqual(body["currency"], "INR")
         self.assertEqual(body["receipt"], "review_abc")
         self.assertEqual(body["notes"], {"review_id": "abc"})
@@ -301,7 +301,7 @@ class TestCreateRazorpayOrderHelper(unittest.TestCase):
              patch("urllib.request.urlopen", side_effect=http_err):
             with self.assertRaises(RuntimeError) as cm:
                 app_module._create_razorpay_order(
-                    amount_paise=5_000,
+                    amount_paise=1_000,
                     currency="INR",
                     receipt="r",
                     notes={},
@@ -730,7 +730,7 @@ class TestInvoiceGenerator(unittest.TestCase):
             invoice_number="HCER-20260420-0001",
             payment_id=DUMMY_PAYMENT_ID,
             order_id=DUMMY_ORDER_ID,
-            amount_paise=5_000,
+            amount_paise=1_000,
             currency="INR",
             customer_email="test@example.com",
             manuscript_title="Test Manuscript Title",
@@ -746,7 +746,7 @@ class TestInvoiceGenerator(unittest.TestCase):
             "invoice_id": "INV-test-pay123",
             "payment_id": DUMMY_PAYMENT_ID,
             "order_id": DUMMY_ORDER_ID,
-            "amount_paise": 5_000,
+            "amount_paise": 1_000,
             "currency": "INR",
         })
         self.assertIsInstance(pdf, bytes)
@@ -758,7 +758,7 @@ class TestInvoiceGenerator(unittest.TestCase):
             invoice_number="HCER-20260420-9999",
             payment_id=DUMMY_PAYMENT_ID,
             order_id=DUMMY_ORDER_ID,
-            amount_paise=5_000,
+            amount_paise=1_000,
             currency="USD",
             customer_email="buyer@example.com",
             manuscript_title="Another Test",
@@ -924,7 +924,7 @@ class TestPaymentMobilePage(unittest.TestCase):
         from unittest.mock import MagicMock
         fake_order = {
             "id": "order_newQR999",
-            "amount": 5_000,
+            "amount": 1_000,
             "currency": "INR",
         }
         fake_resp = MagicMock()

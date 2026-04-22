@@ -196,8 +196,8 @@ def _send_email(
 RAZORPAY_KEY_ID     = os.environ.get("RAZORPAY_KEY_ID", "")
 RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "")
 
-# Payment amount in paise (default 50 INR = 5000 paise, configurable)
-PAYMENT_AMOUNT_PAISE   = int(os.environ.get("PAYMENT_AMOUNT_PAISE", "5000"))
+# Payment amount in paise (default 10 INR = 1000 paise, configurable)
+PAYMENT_AMOUNT_PAISE   = int(os.environ.get("PAYMENT_AMOUNT_PAISE", "1000"))
 PAYMENT_CURRENCY       = "INR"
 PAYMENT_DESCRIPTION    = "Peer Review Report Download"
 
@@ -1168,7 +1168,7 @@ def _render_payment_test_page():
   <h3 style="margin-top:0; color:#00c9b1">Test Details</h3>
   <table>
     <tr><td>Review ID</td><td><code>{test_review_id}</code></td></tr>
-    <tr><td>Amount</td><td><b>&#8377;50</b> (5,000 paise)</td></tr>
+    <tr><td>Amount</td><td><b>&#8377;{PAYMENT_AMOUNT_PAISE // 100}</b> ({PAYMENT_AMOUNT_PAISE:,} paise)</td></tr>
     <tr><td>Currency</td><td>{currency}</td></tr>
     <tr><td>Key ID</td><td><code>{key_id or "not set"}</code></td></tr>
   </table>
