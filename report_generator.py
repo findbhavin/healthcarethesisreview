@@ -777,6 +777,112 @@ def _extract_manuscript_section_items(review_text: str) -> dict[str, list[dict]]
     return OrderedDict((k, v) for k, v in result.items() if v)
 
 
+def _build_section_comment_tables(review_result: dict, story: list, styles,
+                                  h2_style, h3_style, body_style) -> None:
+    """
+    Append per-section comment tables (matching the DOCX Author Revision Report
+    format) to *story*.  Each manuscript section gets its own table with columns:
+    No. | Comment / Revision Required | Priority
+
+    The 'Author Response' column from the DOCX is intentionally excluded.
+    """
+    from reportlab.platypus import PageBreak
+
+    review_text = review_result.get("review_text", "")
+    sections_map = _extract_manuscript_section_items(review_text)
+
+    if not sections_map:
+        stage_items = _extract_revision_items(review_text)
+        if not stage_items:
+            return
+        from collections import OrderedDict
+        sections_map = OrderedDict()
+        for item in stage_items:
+            sec = item["section"]
+            sections_map.setdefault(sec, []).append({
+                "number": len(sections_map.get(sec, [])) + 1,
+                "priority": item["priority"],
+                "comment": item["comment"],
+            })
+    if not sections_map:
+        return
+
+    cell_hdr = ParagraphStyle(
+        "SCHdr", parent=styles["Normal"],
+        fontSize=8.5, fontName="Helvetica-Bold", textColor=C_WHITE,
+    )
+    cell_body = ParagraphStyle(
+        "SCBody", parent=styles["Normal"],
+        fontSize=8.5, leading=13, spaceAfter=1,
+    )
+    cell_center = ParagraphStyle(
+        "SCCenter", parent=cell_body, alignment=TA_CENTER,
+    )
+    sec_title_style = ParagraphStyle(
+        "SCSecTitle", parent=styles["Normal"],
+        fontSize=9.5, fontName="Helvetica-Bold", textColor=C_BLUE,
+        spaceBefore=14, spaceAfter=4,
+    )
+
+    story.append(PageBreak())
+    story.append(Paragraph("Section-by-Section Reviewer Comments", h2_style))
+    story.append(HRFlowable(width="100%", thickness=1, color=C_BLUE, spaceAfter=10))
+
+    col_w = [1.0*cm, 11.5*cm, 3.0*cm]
+
+    for section_label, items in sections_map.items():
+        sec_display = section_label
+        m = re.match(r"(SECTION\s+\d+)\s*[—\-–]+\s*(.+)", section_label, re.IGNORECASE)
+        if m:
+            sec_display = f"{m.group(1).upper()} — {m.group(2).strip().upper()}"
+
+        story.append(Paragraph(sec_display, sec_title_style))
+
+        tbl_data = [[
+            Paragraph("<b>No.</b>", cell_hdr),
+            Paragraph("<b>Comment / Revision Required</b>", cell_hdr),
+            Paragraph("<b>Priority</b>", cell_hdr),
+        ]]
+
+        for item in items:
+            priority = item["priority"]
+            pc = _priority_color(priority)
+            tbl_data.append([
+                Paragraph(str(item["number"]), cell_center),
+                Paragraph(_esc(item["comment"]), cell_body),
+                Paragraph(
+                    f'<font color="{pc.hexval()}"><b>{_esc(priority)}</b></font>',
+                    cell_center,
+                ),
+            ])
+
+        tbl = Table(tbl_data, colWidths=col_w, repeatRows=1)
+        tbl.setStyle(TableStyle([
+            ("BACKGROUND",     (0, 0), (-1, 0), C_BLUE),
+            ("TEXTCOLOR",      (0, 0), (-1, 0), C_WHITE),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [C_WHITE, C_BLUE_BG]),
+            ("GRID",           (0, 0), (-1, -1), 0.4, colors.HexColor("#B0C8E0")),
+            ("VALIGN",         (0, 0), (-1, -1), "TOP"),
+            ("ALIGN",          (0, 0), (0, -1), "CENTER"),
+            ("ALIGN",          (2, 0), (2, -1), "CENTER"),
+            ("TOPPADDING",     (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING",  (0, 0), (-1, -1), 6),
+            ("LEFTPADDING",    (0, 0), (-1, -1), 6),
+            ("RIGHTPADDING",   (0, 0), (-1, -1), 6),
+        ]))
+        story.append(tbl)
+
+    story.append(Spacer(1, 10))
+    story.append(HRFlowable(width="100%", thickness=0.5, color=C_BLUE_LIGHT,
+                            spaceBefore=4, spaceAfter=6))
+    story.append(Paragraph(
+        "Section-by-Section Reviewer Comments  |  AI-Assisted Editorial Review System",
+        ParagraphStyle("SCFooter", parent=styles["Normal"],
+                       fontSize=7.5, textColor=C_GREY,
+                       fontName="Helvetica-Oblique", alignment=1),
+    ))
+
+
 def _build_author_revision_report(review_result: dict, story: list, styles,
                                   h2_style, h3_style, body_style,
                                   label_style, value_style) -> None:
@@ -1286,6 +1392,10 @@ def generate_report(review_result: dict, sample_only: bool = False) -> bytes:
         doc.build(story, onFirstPage=_draw_page_footer, onLaterPages=_draw_page_footer)
         buf.seek(0)
         return buf.read()
+
+    # ── Section-by-Section Reviewer Comments (per-section tables) ─────────
+    _build_section_comment_tables(review_result, story, styles,
+                                  h2_style, h3_style, body_style)
 
     # ── Guidelines Applied appendix ────────────────────────────────────────
     story.append(HRFlowable(width="100%", thickness=1, color=C_BLUE_LIGHT, spaceBefore=16, spaceAfter=8))
