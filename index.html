@@ -97,6 +97,47 @@ body {
   padding: 0 1.5rem 5rem;
 }
 
+/* ── BENEFITS ── */
+.benefits {
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  gap: 0.75rem; margin-bottom: 1.5rem;
+}
+.benefit-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 12px; padding: 1rem 0.9rem;
+  position: relative; overflow: hidden;
+}
+.benefit-card::before {
+  content: ''; position: absolute;
+  top: 0; left: 0; right: 0; height: 2px;
+  background: linear-gradient(90deg, var(--teal), transparent);
+}
+.benefit-num {
+  font-family: 'Instrument Serif', serif;
+  font-size: 2rem; font-weight: 400;
+  color: var(--teal); line-height: 1;
+  margin-bottom: 0.45rem; font-style: italic;
+}
+.benefit-title {
+  font-size: 0.76rem; font-weight: 700;
+  color: var(--white); margin-bottom: 0.3rem;
+  line-height: 1.3;
+}
+.benefit-desc {
+  font-size: 0.7rem; color: var(--text-muted);
+  line-height: 1.5;
+}
+.benefit-stat {
+  display: inline-block; margin-top: 0.45rem;
+  font-size: 0.65rem; font-weight: 700;
+  color: var(--teal); letter-spacing: 0.05em;
+  background: var(--teal-dim); border-radius: 4px;
+  padding: 0.15rem 0.45rem;
+}
+@media (max-width: 700px) {
+  .benefits { grid-template-columns: repeat(2, 1fr); }
+}
+
 /* ── HOW IT WORKS ── */
 .howto {
   background: var(--surface); border: 1px solid var(--border);
@@ -503,11 +544,39 @@ body {
     <span class="pulse-dot"></span>
     AI-Powered · 8-Stage Editorial Review · Medical &amp; Health Sciences
   </div>
-  <h1>Manuscript<br><span>Peer Reviewer</span></h1>
+  <h1>Manuscript<br><span>Pre-submission Review</span></h1>
   <p class="header-sub">Upload your manuscript and receive a detailed 8-stage AI peer review with weighted quality scores, finding cards, and a complete Author Revision Report — ready for journal submission.</p>
 </div>
 
 <div class="container">
+
+<!-- BENEFITS -->
+<div class="benefits">
+  <div class="benefit-card">
+    <div class="benefit-num">93%</div>
+    <div class="benefit-title">Catch Issues Before Rejection</div>
+    <div class="benefit-desc">Top journals reject 93% of submissions. Most are preventable errors — methodology gaps, missing CONSORT/STROBE elements, scope mismatch.</div>
+    <span class="benefit-stat">Reduce desk rejections</span>
+  </div>
+  <div class="benefit-card">
+    <div class="benefit-num">~mins</div>
+    <div class="benefit-title">Feedback in Minutes, Not Months</div>
+    <div class="benefit-desc">Traditional review takes 4–12 weeks per decision. Rejection restarts the clock — costing 6–12 months per cycle. AI review is instant.</div>
+    <span class="benefit-stat">vs. 48 day avg wait</span>
+  </div>
+  <div class="benefit-card">
+    <div class="benefit-num">8×</div>
+    <div class="benefit-title">Save on Revision Costs</div>
+    <div class="benefit-desc">Each rejection means more editing, reformatting, and rewriting rounds. Our 8-stage check catches weaknesses upfront — before costs compound.</div>
+    <span class="benefit-stat">8 review stages</span>
+  </div>
+  <div class="benefit-card">
+    <div class="benefit-num">AI+</div>
+    <div class="benefit-title">Strengthen Your Submission</div>
+    <div class="benefit-desc">A pre-submission dress rehearsal. AI checks structure, stats, ethics &amp; journal fit — so human reviewers focus on your science, not fixable errors.</div>
+    <span class="benefit-stat">Not a replacement — an edge</span>
+  </div>
+</div>
 
 <!-- HOW IT WORKS -->
 <div class="howto">
