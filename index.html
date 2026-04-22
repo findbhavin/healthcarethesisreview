@@ -1737,7 +1737,6 @@ async function startPayment() {
           if (latestDoneEvent) renderReport(latestDoneEvent);
           sendInvoice(response.razorpay_payment_id, response.razorpay_order_id);
           doFullDownload();
-          setTimeout(() => doInvoiceDownload(), 800);
         }
         else alert('Payment verification failed. You can still download the free sample.');
       },
@@ -1801,7 +1800,6 @@ async function checkPaymentStatus() {
       if (latestDoneEvent) renderReport(latestDoneEvent);
       if (data.payment_id) sendInvoice(data.payment_id, paidOrderId);
       doFullDownload();
-      setTimeout(() => doInvoiceDownload(), 800);
     } else {
       checkBtn.textContent = 'Payment not found yet — try again in a moment';
       checkBtn.disabled = false;
@@ -1869,6 +1867,19 @@ document.getElementById('paymentModal').addEventListener('click', function(e) {
 });
 
 window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    const emailModal = document.getElementById('emailModal');
+    const paymentModal = document.getElementById('paymentModal');
+    if (paymentModal && paymentModal.style.display !== 'none') {
+      paymentModal.style.display = 'none';
+      resetPaymentModal();
+      return;
+    }
+    if (emailModal && emailModal.style.display !== 'none') {
+      emailModal.style.display = 'none';
+      return;
+    }
+  }
   const isPrintShortcut = (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p';
   if (isPrintShortcut && !hasFullViewAccess()) {
     e.preventDefault();
