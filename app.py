@@ -169,8 +169,9 @@ def _send_email(
     html_body: str,
     pdf_bytes: bytes | None = None,
     pdf_filename: str = "review.pdf",
+    attachments: list[tuple[bytes, str]] | None = None,
 ) -> None:
-    """Send an HTML email, optionally with a PDF attachment, via SMTP STARTTLS."""
+    """Send an HTML email, optionally with PDF attachments, via SMTP STARTTLS."""
     msg = MIMEMultipart("mixed")
     msg["From"]    = f"Health Care Expert Reviews <{SMTP_EMAIL}>"
     msg["To"]      = to_email
@@ -179,6 +180,10 @@ def _send_email(
     if pdf_bytes:
         part = MIMEApplication(pdf_bytes, Name=pdf_filename)
         part["Content-Disposition"] = f'attachment; filename="{pdf_filename}"'
+        msg.attach(part)
+    for att_bytes, att_name in (attachments or []):
+        part = MIMEApplication(att_bytes, Name=att_name)
+        part["Content-Disposition"] = f'attachment; filename="{att_name}"'
         msg.attach(part)
     with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as s:
         s.ehlo()
@@ -1050,7 +1055,7 @@ def payment_send_invoice():
   </div>
   <div style="padding:28px;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 8px 8px">
     <p>Dear Researcher,</p>
-    <p>Thank you for your payment. Please find your <strong>invoice attached</strong> to this email.</p>
+    <p>Thank you for your payment. Please find your <strong>full peer review report</strong> and <strong>invoice</strong> attached to this email.</p>
     <table style="width:100%;border-collapse:collapse;margin:20px 0;font-size:0.9rem">
       <tr style="background:#f7f7f7">
         <td style="padding:10px 14px;font-weight:bold;width:38%;border:1px solid #e8e8e8">Invoice No.</td>
@@ -1083,14 +1088,26 @@ def payment_send_invoice():
 </body>
 </html>"""
 
+        extra_attachments = []
+        try:
+            report_pdf = generate_report(result)
+            safe_title = (
+                result.get("manuscript_title", "review")[:40]
+                .replace(" ", "_").replace("/", "-").replace("\\", "-")
+            )
+            extra_attachments.append((report_pdf, f"PeerReview_Full_{safe_title}.pdf"))
+        except Exception:
+            logger.warning("Could not attach full report to invoice email")
+
         _send_email(
             email,
-            f"Payment Invoice #{invoice_number} — Health Care Expert Reviews",
+            f"Your Peer Review Report & Invoice #{invoice_number} — Health Care Expert Reviews",
             html_body,
             pdf_bytes,
             f"Invoice_{invoice_number}.pdf",
+            attachments=extra_attachments,
         )
-        logger.info(f"Invoice {invoice_number} emailed to {email} for payment {payment_id}")
+        logger.info(f"Invoice {invoice_number} + report emailed to {email} for payment {payment_id}")
         return jsonify({"sent": True, "invoice_number": invoice_number})
 
     except Exception as e:

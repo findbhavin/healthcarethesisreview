@@ -758,9 +758,7 @@ body {
       <button class="action-btn action-btn-primary" id="sendOtpBtn" onclick="sendOtp()" style="width:100%;margin-bottom:0.6rem">
         Send Verification Code
       </button>
-      <button class="action-btn" onclick="skipEmailAndContinue()" style="width:100%">
-        Skip — Don't email me
-      </button>
+      <p class="modal-hint" style="margin-top:0.5rem">Email verification is required before payment.</p>
     </div>
 
     <!-- Step 2: Enter OTP -->
@@ -782,11 +780,8 @@ body {
           Download Free Report
         </button>
       </div>
-      <button class="action-btn" onclick="backToEmailStep()" style="width:100%;margin-bottom:0.6rem">
+      <button class="action-btn" onclick="backToEmailStep()" style="width:100%">
         ← Change Email
-      </button>
-      <button class="action-btn" onclick="skipEmailAndContinue()" style="width:100%">
-        Skip — Don't email me
       </button>
     </div>
   </div>
@@ -1533,8 +1528,7 @@ function toggleSec(head) {
 // ── DOWNLOAD FLOW ─────────────────────────────────────────────────────────
 function initiateDownload() {
   if (!currentReviewId) { alert('No review available to download.'); return; }
-  // Show email collection first (if server has email configured and not already verified)
-  if (paymentConfig && paymentConfig.email_enabled && !verifiedEmail) {
+  if (!verifiedEmail) {
     showEmailModal();
   } else {
     proceedAfterEmail();
@@ -1868,15 +1862,10 @@ document.getElementById('paymentModal').addEventListener('click', function(e) {
 
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
-    const emailModal = document.getElementById('emailModal');
     const paymentModal = document.getElementById('paymentModal');
     if (paymentModal && paymentModal.style.display !== 'none') {
       paymentModal.style.display = 'none';
       resetPaymentModal();
-      return;
-    }
-    if (emailModal && emailModal.style.display !== 'none') {
-      emailModal.style.display = 'none';
       return;
     }
   }
