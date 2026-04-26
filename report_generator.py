@@ -227,15 +227,8 @@ def _render_stage_body(stage_content: str, styles,
                                         spaceAfter=3)))
             continue
 
-        # ── Decision line ──────────────────────────────────────────────────
+        # ── Decision line (hidden — internal only) ─────────────────────────
         if _RE_DECISION_LINE.match(stripped):
-            decision_text = stripped.split(":", 1)[1].strip() if ":" in stripped else stripped
-            dec_color = _decision_color(decision_text)
-            hex_c = dec_color.hexval()
-            items.append(Paragraph(
-                f'<b>Decision: <font color="{hex_c}">{_esc(decision_text)}</font></b>',
-                decision_style,
-            ))
             continue
 
         # ── Scope Fit line ─────────────────────────────────────────────────
@@ -1100,12 +1093,6 @@ def _build_concluding_remarks(review_result: dict, story: list, styles,
     story.append(Paragraph("Concluding Remarks", h2_style))
     story.append(HRFlowable(width="100%", thickness=1.5, color=C_BLUE, spaceAfter=12))
 
-    # Decision badge
-    story.append(Paragraph(
-        f'Editorial Decision: <font color="{dec_color.hexval()}"><b>{_esc(decision)}</b></font>',
-        decision_box_style,
-    ))
-
     # Summary
     if summary_text:
         story.append(Paragraph(f'<i>{_esc(summary_text)}</i>', summary_style))
@@ -1221,7 +1208,6 @@ def _build_sample_report(story: list, styles, review_result: dict, h2_style, bod
         [
             [Paragraph("Manuscript", card_label), Paragraph(_esc(manuscript_title), card_val)],
             [Paragraph("Weighted Review Score", card_label), Paragraph(_esc(score_text), card_val)],
-            [Paragraph("Editorial Decision", card_label), Paragraph(_esc(decision), card_val)],
         ],
         colWidths=[5 * cm, 10.5 * cm],
     )
@@ -1353,9 +1339,7 @@ def generate_report(review_result: dict, sample_only: bool = False) -> bytes:
     story.append(HRFlowable(width="100%", thickness=1.5, color=C_BLUE, spaceAfter=12))
 
     # ── Manuscript info table ──────────────────────────────────────────────
-    decision        = review_result.get("decision", "See report")
     manuscript_title = review_result.get("manuscript_title", "—")
-    dec_color       = _decision_color(decision)
 
     info_data = [
         [Paragraph("Manuscript Title",     label_style), Paragraph(_esc(manuscript_title), value_style)],
@@ -1364,7 +1348,6 @@ def generate_report(review_result: dict, sample_only: bool = False) -> bytes:
         [Paragraph("Target Journal",       label_style), Paragraph(_esc(review_result.get("journal_name","Not specified") or "Not specified"), value_style)],
         [Paragraph("Date of Review",       label_style), Paragraph(date.today().strftime("%B %d, %Y"), value_style)],
         [Paragraph("Reviewer",             label_style), Paragraph("AI-Assisted Editorial Review System", value_style)],
-        [Paragraph("Editorial Decision",   label_style), Paragraph(f'<font color="{dec_color.hexval()}">{_esc(decision)}</font>', value_style)],
     ]
     col_w = [4*cm, 11.5*cm]
     info_table = Table(info_data, colWidths=col_w)
@@ -1454,11 +1437,7 @@ def generate_report(review_result: dict, sample_only: bool = False) -> bytes:
     except Exception:
         story.append(Paragraph("Guidelines metadata could not be loaded.", body_style))
 
-    # ── SECTION 2: Review Comments and Recommendations table ─────────────────
-    _build_author_revision_report(review_result, story, styles,
-                                  h2_style, h3_style, body_style, label_style, value_style)
-
-    # ── SECTION 4: Concluding Remarks ──────────────────────────────────────
+    # ── Concluding Remarks ──────────────────────────────────────────────────
     _build_concluding_remarks(review_result, story, styles,
                               h2_style, h3_style, body_style)
 

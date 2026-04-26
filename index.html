@@ -698,7 +698,6 @@ body {
       </div>
     </div>
     <div class="score-info">
-      <h2 id="overallVerdict">—</h2>
       <p id="overallSummary">—</p>
     </div>
     <div class="score-bands" id="scoreBands"></div>
@@ -1344,23 +1343,6 @@ function renderReport(evt) {
   setTimeout(() => { gaugeFill.style.strokeDashoffset = offset; }, 150);
   document.getElementById('gaugeNum').textContent = score;
 
-  // ── Verdict ────────────────────────────────────────────────────────────
-  const verdictColors = {
-    'accept':  '#3dd68c',
-    'minor':   '#5b9cf6',
-    'major':   '#ffb020',
-    'reject':  '#ff5c6a',
-  };
-  const decLower = decision.toLowerCase();
-  let vColor = verdictColors.reject;
-  if (decLower.includes('accept as is')) vColor = verdictColors.accept;
-  else if (decLower.includes('minor'))   vColor = verdictColors.minor;
-  else if (decLower.includes('major'))   vColor = verdictColors.major;
-
-  const verdictEl = document.getElementById('overallVerdict');
-  verdictEl.textContent   = decision;
-  verdictEl.style.color   = vColor;
-
   document.getElementById('overallSummary').innerHTML =
     `Manuscript: <strong>${esc(evt.manuscript_title || 'Unknown')}</strong><br>` +
     `Word count: ~${(evt.word_count || 0).toLocaleString()} · ` +
@@ -1829,10 +1811,9 @@ function printReport() {
   window.print();
 }
 function copyReport() {
-  const verdict   = document.getElementById('overallVerdict').textContent;
   const items     = [...document.querySelectorAll('.priority-item')];
   const priorText = items.map((el, i) => `${i+1}. ${el.querySelector('span:last-child').textContent}`).join('\n');
-  const text = `MANUSCRIPT PEER REVIEW REPORT\n\nDecision: ${verdict}\n\nTop Priority Actions:\n${priorText}`;
+  const text = `MANUSCRIPT PEER REVIEW REPORT\n\nTop Priority Actions:\n${priorText}`;
   navigator.clipboard.writeText(text)
     .then(() => alert('Summary copied to clipboard!'))
     .catch(() => alert('Copy failed — please select and copy manually.'));
