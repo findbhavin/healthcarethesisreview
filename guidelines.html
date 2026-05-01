@@ -160,13 +160,16 @@
       font-weight: 700; font-size: 0.95rem;
       flex-shrink: 0;
     }
-    .stage-num.s2 { background: #1976a8; }
-    .stage-num.s3 { background: #1d7a8a; }
-    .stage-num.s4 { background: #0d7f46; }
-    .stage-num.s5 { background: #5c7a1a; }
-    .stage-num.s6 { background: #7a5c1a; }
-    .stage-num.s7 { background: #7a1a1a; }
-    .stage-num.s8 { background: #4a1a7a; }
+    .stage-num.s2  { background: #1976a8; }
+    .stage-num.s3  { background: #1d7a8a; }
+    .stage-num.s4  { background: #0d7f46; }
+    .stage-num.s5  { background: #5c7a1a; }
+    .stage-num.s6  { background: #7a5c1a; }
+    .stage-num.s7  { background: #7a1a1a; }
+    .stage-num.s8  { background: #4a1a7a; }
+    .stage-num.s9  { background: #2a5a7a; }
+    .stage-num.s10 { background: #1a5a4a; }
+    .stage-num.s11 { background: #3a2a5a; }
 
     .stage-title-wrap { flex: 1; }
     .stage-title { font-size: 1rem; font-weight: 700; color: #1a2e4a; }
@@ -497,7 +500,7 @@
   <div class="header-inner">
     <div>
       <h1>&#x1F4CB; AI-Assisted Peer Review System</h1>
-      <p>Review guidelines powering the 8-stage editorial framework</p>
+      <p>Review guidelines powering the 11-stage editorial framework</p>
     </div>
     <div id="header-version" style="font-size:0.82rem;opacity:0.8;text-align:right;"></div>
   </div>
@@ -529,8 +532,8 @@
       <!-- filled by JS -->
     </div>
 
-    <!-- Stage 1-8 -->
-    <div class="section-title">&#x1F4CB; 8-Stage Review Framework</div>
+    <!-- Stage 1-11 -->
+    <div class="section-title">&#x1F4CB; 11-Stage Review Framework</div>
     <div class="stages-grid" id="stages-grid">
       <!-- filled by JS -->
     </div>
@@ -583,7 +586,7 @@
 </footer>
 
 <script>
-  const STAGE_COLORS = ['','s2','s3','s4','s5','s6','s7','s8'];
+  const STAGE_COLORS = ['','s2','s3','s4','s5','s6','s7','s8','s9','s10','s11'];
 
   function esc(str) {
     return (str || "")
@@ -594,10 +597,9 @@
   function decisionClass(label) {
     const l = (label || "").toLowerCase();
     if (l.includes("accept as is")) return "dec-accept";
-    if (l.includes("minor"))  return "dec-minor";
-    if (l.includes("major"))  return "dec-major";
-    if (l.includes("reject and")) return "dec-resub";
-    if (l.includes("reject")) return "dec-reject";
+    if (l.includes("minor revision") || l === "minor") return "dec-minor";
+    if (l.includes("major revision") || l === "major") return "dec-major";
+    if (l.includes("rejection") || l.includes("reject")) return "dec-reject";
     return "";
   }
 
@@ -641,7 +643,7 @@
       <div class="wrs-formula">WRS = (${formula}) ÷ 10 &nbsp;→&nbsp; expressed as 0–100</div>
       <div style="margin-top:14px;">${bars}</div>
       <p style="margin-top:12px;font-size:0.82rem;color:#667;">
-        Stage 8 (Overall Editorial Recommendation) is <strong>derived</strong> from the WRS — it carries no direct weight.
+        Stage 11 (Final Review Recommendation) is <strong>derived</strong> from the WRS — it carries no direct weight.
       </p>
     `;
   }

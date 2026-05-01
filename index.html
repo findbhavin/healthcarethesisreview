@@ -542,10 +542,10 @@ body {
 <div class="header">
   <div class="header-badge">
     <span class="pulse-dot"></span>
-    AI-Powered · 8-Stage Editorial Review · Medical &amp; Health Sciences
+    AI-Powered · 11-Stage Editorial Review · Medical &amp; Health Sciences
   </div>
   <h1>Manuscript<br><span>Pre-submission Review</span></h1>
-  <p class="header-sub">Upload your manuscript and receive a detailed 8-stage AI peer review with weighted quality scores, finding cards, and a complete Author Revision Report — ready for journal submission.</p>
+  <p class="header-sub">Upload your manuscript and receive a detailed 11-stage AI peer review with weighted quality scores, finding cards, and a complete Pre-Submission Review Report — ready for journal submission.</p>
 </div>
 
 <div class="container">
@@ -565,10 +565,10 @@ body {
     <span class="benefit-stat">vs. 48 day avg wait</span>
   </div>
   <div class="benefit-card">
-    <div class="benefit-num">8×</div>
+    <div class="benefit-num">11×</div>
     <div class="benefit-title">Save on Revision Costs</div>
-    <div class="benefit-desc">Each rejection means more editing, reformatting, and rewriting rounds. Our 8-stage check catches weaknesses upfront — before costs compound.</div>
-    <span class="benefit-stat">8 review stages</span>
+    <div class="benefit-desc">Each rejection means more editing, reformatting, and rewriting rounds. Our 11-stage check catches weaknesses upfront — before costs compound.</div>
+    <span class="benefit-stat">11 review stages</span>
   </div>
   <div class="benefit-card">
     <div class="benefit-num">AI+</div>
@@ -589,13 +589,13 @@ body {
     </div>
     <div class="howto-step">
       <span class="howto-icon">🔍</span>
-      <div class="howto-step-title">8-Stage AI Review</div>
+      <div class="howto-step-title">11-Stage AI Review</div>
       <div class="howto-step-desc">Claude analyses all stages with weighted scoring (WRS 0–100)</div>
     </div>
     <div class="howto-step">
       <span class="howto-icon">📊</span>
       <div class="howto-step-title">Detailed Report</div>
-      <div class="howto-step-desc">Get section findings, priority actions, and Author Revision Form PDF</div>
+      <div class="howto-step-desc">Get section findings, priority actions, and Pre-Submission Review Report PDF</div>
     </div>
   </div>
 </div>
@@ -1237,30 +1237,27 @@ async function submitReview() {
 
 // ── PARSE REVIEW TEXT INTO STRUCTURED SECTIONS ────────────────────────────
 const STAGE_DEFS = [
-  { key: 'STAGE 1', title: 'Initial Editorial Screening', emoji: '📋',
-    stageNum: 1, weight: 8 },
-  { key: 'STAGE 2', title: 'Scope & Novelty Check',       emoji: '🎯',
-    stageNum: 2, weight: 12 },
-  { key: 'STAGE 3', title: 'Methodology Review',           emoji: '⚗️',
-    stageNum: 3, weight: 25 },
-  { key: 'STAGE 4', title: 'Results & Data Integrity',     emoji: '📊',
-    stageNum: 4, weight: 20 },
-  { key: 'STAGE 5', title: 'Discussion & Conclusions',     emoji: '💡',
-    stageNum: 5, weight: 15 },
-  { key: 'STAGE 6', title: 'References',                   emoji: '📚',
-    stageNum: 6, weight: 7 },
-  { key: 'STAGE 7', title: 'Ethics & Integrity',           emoji: '🏛️',
-    stageNum: 7, weight: 13 },
-  { key: 'STAGE 8', title: 'Overall Recommendation',       emoji: '📌',
-    stageNum: 8, weight: 0 },
+  { key: 'STAGE 1',  title: 'Initial Editorial Screening',       emoji: '📋', stageNum: 1,  weight: 5  },
+  { key: 'STAGE 2',  title: 'Scope & Novelty Assessment',        emoji: '🎯', stageNum: 2,  weight: 10 },
+  { key: 'STAGE 3',  title: 'Overall Manuscript Quality',        emoji: '✍️', stageNum: 3,  weight: 5  },
+  { key: 'STAGE 4',  title: 'Abstract Review',                   emoji: '📄', stageNum: 4,  weight: 5  },
+  { key: 'STAGE 5',  title: 'Introduction Review',               emoji: '🔍', stageNum: 5,  weight: 8  },
+  { key: 'STAGE 6',  title: 'Methodology Review',                emoji: '⚗️', stageNum: 6,  weight: 25 },
+  { key: 'STAGE 7',  title: 'Results & Data Integrity',          emoji: '📊', stageNum: 7,  weight: 20 },
+  { key: 'STAGE 8',  title: 'Discussion & Conclusions',          emoji: '💡', stageNum: 8,  weight: 12 },
+  { key: 'STAGE 9',  title: 'References Review',                 emoji: '📚', stageNum: 9,  weight: 5  },
+  { key: 'STAGE 10', title: 'Ethics & Integrity Checks',         emoji: '🏛️', stageNum: 10, weight: 5  },
+  { key: 'STAGE 11', title: 'Final Review Recommendation',       emoji: '📌', stageNum: 11, weight: 0  },
 ];
 
 function splitIntoStageBlocks(text) {
   const blocks = {};
   let curKey = 'PRE', curLines = [];
+  // Sort by key length descending so "STAGE 10"/"STAGE 11" match before "STAGE 1"
+  const sortedDefs = [...STAGE_DEFS].sort((a, b) => b.key.length - a.key.length);
   for (const line of text.split('\n')) {
     const up = line.trim().toUpperCase();
-    const found = STAGE_DEFS.find(s => up.startsWith(s.key));
+    const found = sortedDefs.find(s => up.startsWith(s.key));
     if (found) {
       blocks[curKey] = curLines.join('\n').trim();
       curKey   = found.key;
@@ -1275,7 +1272,7 @@ function splitIntoStageBlocks(text) {
 
 function parseFindings(blockText) {
   const findings = [];
-  const sevRe   = /^\[?(MAJOR|MINOR|SUGGESTION)\]?\s*[-:]?\s*(.+)/i;
+  const sevRe   = /^\[?(MAJOR|MINOR|INFO|SUGGESTION)\]?\s*[-:]?\s*(.+)/i;
   const bulletRe = /^[-•*]\s+(.+)/;
   const numRe    = /^\d+\.\s+(.+)/;
 

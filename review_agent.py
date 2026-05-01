@@ -175,8 +175,9 @@ def _extract_stage_scores(review_text: str) -> dict:
     stage_scores: dict[int, int] = {}
 
     # Find each STAGE N block and look for Score: X/10 within it
+    # Use \d+ to handle two-digit stage numbers (10, 11)
     stage_pattern = re.compile(
-        r"STAGE\s+(\d)\s*:.*?(?=STAGE\s+\d\s*:|END OF REVIEW|$)",
+        r"STAGE\s+(\d+)\s*[:\-—].*?(?=STAGE\s+\d+\s*[:\-—]|PRE-SUBMISSION REVIEW REPORT|END OF REVIEW|$)",
         re.DOTALL | re.IGNORECASE,
     )
     score_pattern = re.compile(r"Score\s*:\s*(\d+)\s*/\s*10", re.IGNORECASE)
@@ -188,17 +189,18 @@ def _extract_stage_scores(review_text: str) -> dict:
         if score_match:
             stage_scores[stage_num] = min(10, max(0, int(score_match.group(1))))
 
-    # Also try to extract from a "Weighted Review Score" line in Stage 8
+    # Also try to extract from a "WEIGHTED REVIEW SCORE" line in the report header
     wrs_line_match = re.search(
-        r"Weighted Review Score.*?:\s*([\d.]+)\s*/\s*100",
+        r"WEIGHTED REVIEW SCORE.*?:\s*([\d.]+)\s*/\s*100",
         review_text, re.IGNORECASE,
     )
 
     # Compute weighted score from parsed stage scores
+    # Stages 1–10 are scored; Stage 11 is the Final Recommendation (derived)
     weighted_sum = 0.0
     max_possible = 0.0
     wrs_parts = []
-    for stage_num in range(1, 8):  # Stages 1–7 are scored; Stage 8 is derived
+    for stage_num in range(1, 11):
         weight = weights.get(stage_num, 0)
         score = stage_scores.get(stage_num)
         if score is not None and weight > 0:
@@ -285,19 +287,34 @@ def run_review(file_bytes: bytes, filename: str, journal_name: str = "",
     review_text = generate_text(system_prompt, user_message, ai_config=cfg)
     logger.info("Review completed successfully.")
 
-    # Parse decision from report
+    # Parse decision from report — handles both "Decision:" and "[X] Minor Revision" formats
     decision = "See report"
     for line in review_text.splitlines():
-        if line.strip().lower().startswith("decision:"):
-            decision = line.split(":", 1)[1].strip()
+        stripped = line.strip()
+        if stripped.lower().startswith("decision:"):
+            decision = stripped.split(":", 1)[1].strip()
             break
+        # New format: "PROBABLE DECISION:" followed by "[X] Minor Revision" on same or next lines
+        if "probable decision" in stripped.lower():
+            # check if decision is on this line or next
+            after = stripped.split(":", 1)[1].strip() if ":" in stripped else ""
+            if after:
+                decision = after
+            break
+    # If still "See report", scan for checked decision box: "[X] Minor/Major/Rejection"
+    if decision == "See report":
+        for line in review_text.splitlines():
+            m = re.search(r"\[X\]\s*(Minor Revision|Major Revision|Rejection)", line, re.IGNORECASE)
+            if m:
+                decision = m.group(1)
+                break
 
     # Parse manuscript title from report
     manuscript_title = filename
     for line in review_text.splitlines():
-        if "manuscript title:" in line.lower():
+        if "manuscript title" in line.lower() and ":" in line:
             candidate = line.split(":", 1)[1].strip()
-            if candidate and candidate not in ("Not provided", "[Not provided]", "—"):
+            if candidate and candidate not in ("Not provided", "[Not provided]", "—", "[insert full title here]"):
                 manuscript_title = candidate
             break
 
@@ -380,19 +397,31 @@ def stream_review(file_bytes: bytes, filename: str, journal_name: str = "",
         review_text = "".join(full_text_parts)
         logger.info("[stream] Review stream completed.")
 
-        # Parse decision
+        # Parse decision — handles "Decision:" and "[X] Minor/Major/Rejection" formats
         decision = "See report"
         for line in review_text.splitlines():
-            if line.strip().lower().startswith("decision:"):
-                decision = line.split(":", 1)[1].strip()
+            stripped = line.strip()
+            if stripped.lower().startswith("decision:"):
+                decision = stripped.split(":", 1)[1].strip()
                 break
+            if "probable decision" in stripped.lower():
+                after = stripped.split(":", 1)[1].strip() if ":" in stripped else ""
+                if after:
+                    decision = after
+                break
+        if decision == "See report":
+            for line in review_text.splitlines():
+                m = re.search(r"\[X\]\s*(Minor Revision|Major Revision|Rejection)", line, re.IGNORECASE)
+                if m:
+                    decision = m.group(1)
+                    break
 
         # Parse title
         manuscript_title = filename
         for line in review_text.splitlines():
-            if "manuscript title:" in line.lower():
+            if "manuscript title" in line.lower() and ":" in line:
                 candidate = line.split(":", 1)[1].strip()
-                if candidate and candidate not in ("Not provided", "[Not provided]", "—"):
+                if candidate and candidate not in ("Not provided", "[Not provided]", "—", "[insert full title here]"):
                     manuscript_title = candidate
                 break
 

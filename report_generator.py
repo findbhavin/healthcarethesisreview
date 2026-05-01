@@ -47,26 +47,32 @@ C_SCORE_MED   = colors.HexColor("#B86E00")   # 5–7/10
 C_SCORE_LOW   = colors.HexColor("#CC0000")   # < 5/10
 C_SCORE_BG    = colors.HexColor("#E8F0E8")   # bar background
 
-STAGE_HEADERS = ["STAGE 1","STAGE 2","STAGE 3","STAGE 4","STAGE 5","STAGE 6","STAGE 7","STAGE 8"]
+STAGE_HEADERS = [
+    "STAGE 1", "STAGE 2", "STAGE 3", "STAGE 4", "STAGE 5", "STAGE 6",
+    "STAGE 7", "STAGE 8", "STAGE 9", "STAGE 10", "STAGE 11",
+]
 
 STAGE_TITLES = {
-    "STAGE 1": "Initial Editorial Screening",
-    "STAGE 2": "Scope and Novelty Check",
-    "STAGE 3": "Methodology Review",
-    "STAGE 4": "Results and Data Integrity",
-    "STAGE 5": "Discussion and Conclusions",
-    "STAGE 6": "References",
-    "STAGE 7": "Ethical and Integrity Checks",
-    "STAGE 8": "Overall Editorial Recommendation",
+    "STAGE 1":  "Initial Editorial Screening",
+    "STAGE 2":  "Scope and Novelty Assessment",
+    "STAGE 3":  "Overall Manuscript Quality Assessment",
+    "STAGE 4":  "Abstract Review",
+    "STAGE 5":  "Introduction Review",
+    "STAGE 6":  "Methodology Review",
+    "STAGE 7":  "Results and Data Integrity Review",
+    "STAGE 8":  "Discussion and Conclusions Review",
+    "STAGE 9":  "References Review",
+    "STAGE 10": "Ethics and Integrity Checks",
+    "STAGE 11": "Final Review Recommendation",
 }
 
 
 def _decision_color(decision: str):
     d = (decision or "").lower()
     if "accept as is" in d or d == "accept": return C_ACCEPT
-    if "minor"  in d: return C_AMBER
-    if "major"  in d: return C_MAJOR
-    if "reject" in d: return C_REJECT
+    if "minor revision" in d or d == "minor": return C_AMBER
+    if "major revision" in d or d == "major": return C_MAJOR
+    if "rejection" in d or "reject" in d: return C_REJECT
     return C_DARK
 
 
@@ -116,7 +122,7 @@ _RE_BULLET         = re.compile(r"^[-•*]\s+")
 _RE_NUMBERED       = re.compile(r"^\d+\.\s+")
 _RE_SUB_HEADING    = re.compile(r"^[A-Z][A-Za-z &/()]+:\s*$")   # e.g. "Key Required Revisions:"
 _RE_INLINE_LABEL   = re.compile(r"^([A-Z][A-Za-z &/()]+):\s+(.+)$")  # e.g. "Decision: Major revision"
-_RE_SEVERITY_TAG   = re.compile(r"^\[?(MAJOR|MINOR|SUGGESTION)\]?\s*[-:]?\s*", re.IGNORECASE)
+_RE_SEVERITY_TAG   = re.compile(r"^\[?(MAJOR|MINOR|INFO|SUGGESTION)\]?\s*[-:]?\s*", re.IGNORECASE)
 
 
 def _render_stage_body(stage_content: str, styles,
@@ -190,7 +196,7 @@ def _render_stage_body(stage_content: str, styles,
                                     color=C_BLUE_LIGHT, spaceBefore=4, spaceAfter=4))
             continue
 
-        # ── Stage heading line (e.g. "STAGE 3: METHODOLOGY REVIEW") ──────
+        # ── Stage heading line (e.g. "STAGE 6: METHODOLOGY REVIEW") ──────
         matched_stage = any(stripped.upper().startswith(sh) for sh in STAGE_HEADERS)
         if matched_stage:
             # Already rendered as the section heading; skip this line
@@ -271,6 +277,9 @@ def _render_stage_body(stage_content: str, styles,
             elif sev_word == "MINOR":
                 tag_hex = C_AMBER.hexval()
                 st = body_minor
+            elif sev_word in ("INFO", "SUGGESTION"):
+                tag_hex = C_SUGGEST.hexval()
+                st = body_sug
             else:
                 tag_hex = C_SUGGEST.hexval()
                 st = body_sug
@@ -404,13 +413,16 @@ def _build_scorecard(review_result: dict, styles) -> list:
 
     # Per-stage score table with mini bars
     stage_short_names = {
-        1: "Initial Editorial Screening",
-        2: "Scope & Novelty",
-        3: "Methodology Review",
-        4: "Results & Data Integrity",
-        5: "Discussion & Conclusions",
-        6: "References",
-        7: "Ethical & Integrity",
+        1:  "Initial Editorial Screening",
+        2:  "Scope & Novelty",
+        3:  "Overall Quality",
+        4:  "Abstract Review",
+        5:  "Introduction Review",
+        6:  "Methodology Review",
+        7:  "Results & Data Integrity",
+        8:  "Discussion & Conclusions",
+        9:  "References Review",
+        10: "Ethics & Integrity",
     }
 
     bar_w = 100
@@ -426,7 +438,7 @@ def _build_scorecard(review_result: dict, styles) -> list:
         ]
     ]
 
-    for stage_num in range(1, 8):
+    for stage_num in range(1, 11):
         score = stage_scores.get(stage_num)
         if score is None:
             continue
@@ -462,7 +474,8 @@ def _build_scorecard(review_result: dict, styles) -> list:
 
     story.append(Spacer(1, 8))
     story.append(Paragraph(
-        "WRS = Σ(Stage Score × Stage Weight) ÷ 10  |  Weights: S1:8%, S2:12%, S3:25%, S4:20%, S5:15%, S6:7%, S7:13%",
+        "WRS = Σ(Stage Score × Stage Weight) ÷ 10  |  "
+        "Weights: S1:5%, S2:10%, S3:5%, S4:5%, S5:8%, S6:25%, S7:20%, S8:12%, S9:5%, S10:5%",
         small_style,
     ))
     story.append(Spacer(1, 12))
@@ -521,6 +534,7 @@ def _build_section_findings_table(review_result: dict, styles) -> list:
     _label_to_num = {
         "Stage 1": 1, "Stage 2": 2, "Stage 3": 3, "Stage 4": 4,
         "Stage 5": 5, "Stage 6": 6, "Stage 7": 7, "Stage 8": 8,
+        "Stage 9": 9, "Stage 10": 10, "Stage 11": 11,
     }
 
     story = []
@@ -551,7 +565,7 @@ def _build_section_findings_table(review_result: dict, styles) -> list:
         # Score cell — show only on first row for each stage (row-span look)
         if stage_num and stage_num != prev_stage:
             sc = stage_scores.get(stage_num)
-            if sc is not None and stage_num != 8:
+            if sc is not None and stage_num != 11:
                 sc_color = _score_color(sc)
                 score_text = f'<font color="{sc_color.hexval()}"><b>{sc}/10</b></font>'
             else:
@@ -606,18 +620,21 @@ def _extract_revision_items(review_text: str) -> list[dict]:
     """
     items = []
     stages = _split_into_stages(review_text)
-    sev_re = re.compile(r"^\[?(MAJOR|MINOR|SUGGESTION)\]?\s*[-:]?\s*(.+)", re.IGNORECASE)
+    sev_re = re.compile(r"^\[?(MAJOR|MINOR|INFO|SUGGESTION)\]?\s*[-:]?\s*(.+)", re.IGNORECASE)
     numbered_re = re.compile(r"^\d+\.\s+(.+)")
 
     stage_display = {
-        "STAGE 1": "Stage 1 — Initial Editorial Screening",
-        "STAGE 2": "Stage 2 — Scope & Novelty",
-        "STAGE 3": "Stage 3 — Methodology",
-        "STAGE 4": "Stage 4 — Results & Data Integrity",
-        "STAGE 5": "Stage 5 — Discussion & Conclusions",
-        "STAGE 6": "Stage 6 — References",
-        "STAGE 7": "Stage 7 — Ethics & Integrity",
-        "STAGE 8": "Stage 8 — Overall Recommendation",
+        "STAGE 1":  "Stage 1 — Initial Editorial Screening",
+        "STAGE 2":  "Stage 2 — Scope & Novelty",
+        "STAGE 3":  "Stage 3 — Overall Quality",
+        "STAGE 4":  "Stage 4 — Abstract Review",
+        "STAGE 5":  "Stage 5 — Introduction Review",
+        "STAGE 6":  "Stage 6 — Methodology",
+        "STAGE 7":  "Stage 7 — Results & Data Integrity",
+        "STAGE 8":  "Stage 8 — Discussion & Conclusions",
+        "STAGE 9":  "Stage 9 — References",
+        "STAGE 10": "Stage 10 — Ethics & Integrity",
+        "STAGE 11": "Stage 11 — Final Recommendation",
     }
 
     for stage_key in STAGE_HEADERS:
@@ -634,6 +651,8 @@ def _extract_revision_items(review_text: str) -> list[dict]:
             m = sev_re.match(stripped)
             if m:
                 sev = m.group(1).upper()
+                if sev == "SUGGESTION":
+                    sev = "INFO"
                 comment = m.group(2).strip()
                 if comment:
                     items.append({
@@ -643,8 +662,8 @@ def _extract_revision_items(review_text: str) -> list[dict]:
                     })
                 continue
 
-            # Numbered items inside "Key Required Revisions" (Stage 8)
-            if stage_key == "STAGE 8":
+            # Numbered items inside "Key Required Revisions" (Stage 11)
+            if stage_key == "STAGE 11":
                 m2 = numbered_re.match(stripped)
                 if m2:
                     items.append({
@@ -658,24 +677,24 @@ def _extract_revision_items(review_text: str) -> list[dict]:
 
 def _priority_color(priority: str):
     p = priority.upper()
-    if p == "MAJOR":       return C_MAJOR
-    if p == "MINOR":       return C_AMBER
-    if p in ("SUGGESTION", "INFO"):  return C_SUGGEST
+    if p == "MAJOR":                    return C_MAJOR
+    if p == "MINOR":                    return C_AMBER
+    if p in ("INFO", "SUGGESTION"):     return C_SUGGEST
     return C_DARK
 
 
-# Maps manuscript sections → review stages (shown in Author Revision Report)
+# Maps manuscript sections → review stages (per Instruction-1.docx section mapping)
 _SECTION_TO_STAGE = {
     "SECTION 1 — TITLE":                            "Stage 1 — Initial Editorial Screening",
     "SECTION 2 — KEYWORDS":                         "Stage 1 — Initial Editorial Screening",
-    "SECTION 3 — ABSTRACT":                         "Stage 1 — Initial Editorial Screening",
-    "SECTION 4 — INTRODUCTION":                     "Stage 2 — Scope & Novelty",
-    "SECTION 5 — METHODS":                          "Stage 3 — Methodology Review",
-    "SECTION 6 — RESULTS":                          "Stage 4 — Results & Data Integrity",
-    "SECTION 7 — DISCUSSION AND CONCLUSIONS":       "Stage 5 — Discussion & Conclusions",
-    "SECTION 8 — REFERENCES":                       "Stage 6 — References",
-    "SECTION 9 — TABLES AND FIGURES":               "Stage 4 — Results & Data Integrity",
-    "SECTION 10 — GENERAL AND MANUSCRIPT-WIDE COMMENTS": "Stages 7 & 8 — Ethics & Overall Recommendation",
+    "SECTION 3 — ABSTRACT":                         "Stage 4 — Abstract Review",
+    "SECTION 4 — INTRODUCTION":                     "Stage 5 — Introduction Review",
+    "SECTION 5 — METHODS":                          "Stage 6 — Methodology Review",
+    "SECTION 6 — RESULTS":                          "Stage 7 — Results & Data Integrity",
+    "SECTION 7 — DISCUSSION AND CONCLUSIONS":       "Stage 8 — Discussion & Conclusions",
+    "SECTION 8 — REFERENCES":                       "Stage 9 — References Review",
+    "SECTION 9 — TABLES AND FIGURES":               "Stage 7 — Results (Tables & Figures)",
+    "SECTION 10 — GENERAL AND MANUSCRIPT-WIDE COMMENTS": "Stages 1, 2, 3 & 10 — Editorial, Scope, Quality & Ethics",
 }
 
 # Canonical section order matching the Author_Revision_Report_Form.docx
@@ -696,7 +715,11 @@ _RE_MS_SECTION = re.compile(
     r"SECTION\s+(\d+)\s*[—\-–]+\s*(.+)", re.IGNORECASE
 )
 _RE_MS_ITEM = re.compile(
-    r"^\d+\.\s+(MAJOR|MINOR|INFO|SUGGESTION)\s*:\s*(.+)", re.IGNORECASE
+    r"^\d+\.\s*\|?\s*(MAJOR|MINOR|INFO|SUGGESTION)\s*[:\|]?\s*(.+)", re.IGNORECASE
+)
+# New table-format line: "1. | comment text | MAJOR"
+_RE_MS_TABLE_ITEM = re.compile(
+    r"^(\d+)\.\s*\|\s*(.+?)\s*\|\s*(MAJOR|MINOR|INFO|SUGGESTION)\s*$", re.IGNORECASE
 )
 
 
@@ -710,12 +733,20 @@ def _extract_manuscript_section_items(review_text: str) -> dict[str, list[dict]]
     """
     from collections import OrderedDict
 
-    # Find the AUTHOR REVISION REPORT block
-    start_m = re.search(r"AUTHOR REVISION REPORT", review_text, re.IGNORECASE)
+    # Find the PRE-SUBMISSION REVIEW REPORT or AUTHOR REVISION REPORT block
+    start_m = re.search(
+        r"PRE-SUBMISSION REVIEW REPORT|AUTHOR REVISION REPORT",
+        review_text, re.IGNORECASE,
+    )
     if not start_m:
         return {}
-    end_m = re.search(r"END OF AUTHOR REVISION REPORT", review_text, re.IGNORECASE)
-    block = review_text[start_m.end(): end_m.start() if end_m else len(review_text)]
+    end_m = re.search(
+        r"END OF (AUTHOR REVISION|PRE-SUBMISSION) REVIEW REPORT|"
+        r"AI-Assisted Editorial Review System",
+        review_text[start_m.end():], re.IGNORECASE,
+    )
+    block_end = (start_m.end() + end_m.start()) if end_m else len(review_text)
+    block = review_text[start_m.end(): block_end]
 
     result: dict[str, list[dict]] = OrderedDict()
     current_section = None
@@ -747,7 +778,23 @@ def _extract_manuscript_section_items(review_text: str) -> dict[str, list[dict]]
         if stripped.upper() == "NONE":
             continue
 
-        # Parse a numbered comment line: "1. MAJOR: ..."
+        # Parse table-format line: "1. | comment | MAJOR"
+        tbl_m = _RE_MS_TABLE_ITEM.match(stripped)
+        if tbl_m:
+            priority = tbl_m.group(3).upper()
+            if priority == "SUGGESTION":
+                priority = "INFO"
+            comment = tbl_m.group(2).strip()
+            if comment and comment not in ("[comment]", "Comment / Revision Required"):
+                item_counter += 1
+                result[current_section].append({
+                    "number": item_counter,
+                    "priority": priority,
+                    "comment": comment,
+                })
+            continue
+
+        # Parse legacy numbered comment line: "1. MAJOR: ..."
         item_m = _RE_MS_ITEM.match(stripped)
         if item_m:
             priority = item_m.group(1).upper()
@@ -1036,15 +1083,15 @@ def _build_concluding_remarks(review_result: dict, story: list, styles,
     decision    = review_result.get("decision", "—")
     dec_color   = _decision_color(decision)
 
-    # Parse Stage 8 for summary and key revisions
+    # Parse Stage 11 for summary and key revisions (Final Recommendation stage)
     stages = _split_into_stages(review_text)
-    stage8_text = stages.get("STAGE 8", "")
+    stage11_text = stages.get("STAGE 11", "") or stages.get("STAGE 8", "")
 
     summary_text = ""
     key_revisions: list[str] = []
     in_revisions = False
 
-    for line in stage8_text.splitlines():
+    for line in stage11_text.splitlines():
         stripped = line.strip()
         if not stripped:
             continue
