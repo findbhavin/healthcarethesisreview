@@ -720,15 +720,49 @@ def _extract_revision_items(review_text: str) -> list[dict]:
         "STAGE 11": "Stage 11 — Final Recommendation",
     }
 
+    # These are legend/template lines from the output format — not real findings.
+    # Match exact legend phrases that the AI copies verbatim from the output template.
+    _LEGEND_PHRASES = re.compile(
+        r"^(must be addressed|may cause rejection|should be addressed|"
+        r"justify if not done|informational observation|no action required|"
+        r"informational|priority legend|must be fixed|likely causes rejection)",
+        re.IGNORECASE,
+    )
+    # Skip stage 11 blocks that are headers/metadata/template lines
+    _TEMPLATE_LINES = re.compile(
+        r"^(probable decision|manuscript details|manuscript title|manuscript type|"
+        r"date of review|weighted review score|score breakdown|stage scores|"
+        r"priority legend|pre-submission review report|consolidated review|"
+        r"please address all|section mapping|────|════|----)",
+        re.IGNORECASE,
+    )
+
     for stage_key in STAGE_HEADERS:
         block = stages.get(stage_key, "")
         if not block:
             continue
         section_label = stage_display.get(stage_key, stage_key)
 
+        in_legend = False
         for line in block.splitlines():
             stripped = line.strip()
             if not stripped:
+                continue
+
+            # Detect entry into a "Priority Legend:" block and exit on blank or next section
+            if re.match(r"^priority legend", stripped, re.IGNORECASE):
+                in_legend = True
+                continue
+            # Exit legend block when we hit a separator or a section header
+            if in_legend and (stripped.startswith("─") or stripped.startswith("═")
+                              or re.match(r"^section\s+\d+", stripped, re.IGNORECASE)):
+                in_legend = False
+
+            if in_legend:
+                continue  # skip all lines inside the legend block
+
+            # Skip template/header lines that appear in Stage 11 report preamble
+            if stage_key == "STAGE 11" and _TEMPLATE_LINES.match(stripped):
                 continue
 
             m = sev_re.match(stripped)
@@ -737,7 +771,8 @@ def _extract_revision_items(review_text: str) -> list[dict]:
                 if sev == "SUGGESTION":
                     sev = "INFO"
                 comment = m.group(2).strip()
-                if comment:
+                # Skip legend phrase lines (e.g. "MAJOR — Must be addressed; may cause rejection")
+                if comment and not _LEGEND_PHRASES.match(comment):
                     items.append({
                         "section": section_label,
                         "comment": comment,
@@ -749,11 +784,13 @@ def _extract_revision_items(review_text: str) -> list[dict]:
             if stage_key == "STAGE 11":
                 m2 = numbered_re.match(stripped)
                 if m2:
-                    items.append({
-                        "section": section_label,
-                        "comment": m2.group(1).strip(),
-                        "priority": "MAJOR",
-                    })
+                    comment = m2.group(1).strip()
+                    if comment and not _LEGEND_PHRASES.match(comment):
+                        items.append({
+                            "section": section_label,
+                            "comment": comment,
+                            "priority": "MAJOR",
+                        })
 
     return items
 
@@ -1239,34 +1276,55 @@ def _build_concluding_remarks(review_result: dict, story: list, styles,
             ))
         story.append(Spacer(1, 8))
 
-    # MAJOR items from all stages (if no key revisions were parsed)
+    # Prefer items from the structured manuscript sections (new PRE-SUBMISSION format);
+    # fall back to stage-based extraction only if sections parsing yielded nothing.
+    def _flat_section_items(priority_filter):
+        sections = _extract_manuscript_section_items(review_text)
+        flat = []
+        for sec_label, sec_items in sections.items():
+            for item in sec_items:
+                if item["priority"] in priority_filter:
+                    sec_short = re.sub(r"SECTION\s+\d+\s*[—\-–]+\s*", "", sec_label,
+                                       flags=re.IGNORECASE).strip().title()
+                    flat.append({**item, "section": sec_short})
+        return flat
+
+    # MAJOR items — prefer manuscript sections, fall back to stage extraction
     if not key_revisions:
-        major_items = [
-            item for item in _extract_revision_items(review_text)
-            if item["priority"] == "MAJOR"
-        ]
+        major_items = _flat_section_items({"MAJOR"})
+        if not major_items:
+            major_items = [
+                item for item in _extract_revision_items(review_text)
+                if item["priority"] == "MAJOR"
+            ]
         if major_items:
             story.append(Paragraph("What the Author Must Address", small_label))
             story.append(HRFlowable(width="100%", thickness=0.5, color=C_BLUE_LIGHT, spaceAfter=6))
             for idx, item in enumerate(major_items, 1):
+                sec_tag = item.get("section", "")
+                sec_part = f'<b>[{_esc(sec_tag)}]</b> ' if sec_tag else ""
                 story.append(Paragraph(
                     f'<font color="{C_MAJOR.hexval()}"><b>{idx}.</b></font> '
-                    f'<b>[{_esc(item["section"].split(" — ")[-1])}]</b> {_esc(item["comment"])}',
+                    f'{sec_part}{_esc(item["comment"])}',
                     bullet_style,
                 ))
             story.append(Spacer(1, 8))
 
-    # Optional improvements
-    minor_items = [
-        item for item in _extract_revision_items(review_text)
-        if item["priority"] in ("MINOR", "SUGGESTION")
-    ]
+    # Optional improvements — prefer manuscript sections, fall back to stage extraction
+    minor_items = _flat_section_items({"MINOR", "INFO"})
+    if not minor_items:
+        minor_items = [
+            item for item in _extract_revision_items(review_text)
+            if item["priority"] in ("MINOR", "INFO", "SUGGESTION")
+        ]
     if minor_items:
         story.append(Paragraph("What the Author Should Consider", small_label))
         story.append(HRFlowable(width="100%", thickness=0.5, color=C_BLUE_LIGHT, spaceAfter=6))
         for item in minor_items[:8]:  # cap at 8 to keep this concise
+            sec_tag = item.get("section", "")
+            prefix = f'<b>[{_esc(sec_tag)}]</b> ' if sec_tag else ""
             story.append(Paragraph(
-                f'<font color="{C_AMBER.hexval()}">&#x25B8;</font> {_esc(item["comment"])}',
+                f'<font color="{C_AMBER.hexval()}">*</font> {prefix}{_esc(item["comment"])}',
                 bullet_style,
             ))
         if len(minor_items) > 8:
@@ -1282,7 +1340,7 @@ def _build_concluding_remarks(review_result: dict, story: list, styles,
     story.append(HRFlowable(width="100%", thickness=0.5, color=C_BLUE_LIGHT,
                             spaceBefore=10, spaceAfter=10))
     story.append(Paragraph(
-        "&#x1F4CC; <b>Note on Resubmission:</b>",
+        "<b>Note on Resubmission:</b>",
         ParagraphStyle("NoteHdr", parent=styles["Normal"],
                        fontSize=10, fontName="Helvetica-Bold",
                        textColor=C_BLUE, spaceAfter=4),
