@@ -105,8 +105,91 @@ def _severity_color(text: str):
 
 
 def _esc(text: str) -> str:
-    """Escape special XML chars for Paragraph content."""
-    return (text or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    """Sanitize Unicode and escape special XML chars for ReportLab Paragraph content."""
+    text = _sanitize(text or "")
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+# Map common Unicode characters to their Latin-1 / ASCII equivalents so that
+# ReportLab's built-in Helvetica font (Latin-1 only) can render them without
+# producing black-rectangle glyphs.
+_UNICODE_REPLACEMENTS = str.maketrans({
+    # Dashes and hyphens
+    "–": "-",    # en dash
+    "—": "-",    # em dash
+    "―": "-",    # horizontal bar
+    "−": "-",    # minus sign
+    # Quotes
+    "‘": "'",    # left single quotation
+    "’": "'",    # right single quotation
+    "‚": ",",    # single low-9 quotation
+    "“": '"',    # left double quotation
+    "”": '"',    # right double quotation
+    "„": '"',    # double low-9 quotation
+    "‹": "<",    # single left angle quotation
+    "›": ">",    # single right angle quotation
+    # Ellipsis and dots
+    "…": "...",  # ellipsis
+    "‧": ".",    # hyphenation point
+    # Arrows
+    "→": "->",   # rightwards arrow
+    "←": "<-",   # leftwards arrow
+    "↔": "<->",  # left right arrow
+    "▶": ">",    # black right-pointing triangle
+    "▸": ">",    # black right-pointing small triangle
+    "►": ">",    # black right-pointing pointer
+    "◄": "<",    # black left-pointing pointer
+    "‣": ">",    # triangular bullet
+    # Bullets and boxes
+    "•": "-",    # bullet
+    "‣": "-",    # triangular bullet
+    "▪": "-",    # black small square
+    "▫": "-",    # white small square
+    "■": "[x]",  # black square (checkbox ticked)
+    "□": "[ ]",  # white square (checkbox empty)
+    "☐": "[ ]",  # ballot box
+    "☑": "[x]",  # ballot box with check
+    "☒": "[x]",  # ballot box with X
+    "✓": "(ok)", # check mark
+    "✔": "(ok)", # heavy check mark
+    "✕": "(x)",  # multiplication x
+    "✖": "(x)",  # heavy multiplication x
+    "✗": "(x)",  # ballot x
+    "✘": "(x)",  # heavy ballot x
+    # Spaces
+    " ": " ",    # non-breaking space
+    "​": "",     # zero-width space
+    "‌": "",     # zero-width non-joiner
+    "‍": "",     # zero-width joiner
+    "﻿": "",     # BOM / zero-width no-break space
+    # Mathematical
+    "°": " deg", # degree sign (already Latin-1 but included for clarity)
+    "±": "+/-",  # plus-minus
+    "×": "x",    # multiplication sign
+    "÷": "/",    # division sign
+    "≤": "<=",   # less-than or equal
+    "≥": ">=",   # greater-than or equal
+    "≈": "~",    # almost equal
+    "≠": "!=",   # not equal
+    # Misc punctuation
+    "†": "+",    # dagger
+    "‡": "++",   # double dagger
+    "·": ".",    # middle dot
+    "′": "'",    # prime
+    "″": "''",   # double prime
+})
+
+
+def _sanitize(text: str) -> str:
+    """
+    Replace Unicode characters that Helvetica (Latin-1) cannot render,
+    then drop any remaining non-Latin-1 characters to prevent black rectangles.
+    """
+    if not text:
+        return text
+    text = text.translate(_UNICODE_REPLACEMENTS)
+    # Drop any remaining non-Latin-1 characters (encode to latin-1, replace unknowns)
+    return text.encode("latin-1", errors="replace").decode("latin-1").replace("?", " ").rstrip()
 
 
 # ── Line-type classifiers ──────────────────────────────────────────────────
