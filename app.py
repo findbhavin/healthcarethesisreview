@@ -314,6 +314,58 @@ def health():
 
 
 # ---------------------------------------------------------------------------
+# SEO — robots.txt and sitemap.xml
+# ---------------------------------------------------------------------------
+
+@app.route("/robots.txt", methods=["GET"])
+def robots_txt():
+    site_url = os.environ.get("SITE_URL", "https://www.healthcarethesisreview.com")
+    content = f"""User-agent: *
+Allow: /
+Allow: /guidelines-page
+Disallow: /admin
+Disallow: /admin/
+Disallow: /review
+Disallow: /download/
+Disallow: /invoice/
+Disallow: /payment/
+Disallow: /email/
+
+Sitemap: {site_url}/sitemap.xml
+"""
+    return content, 200, {"Content-Type": "text/plain; charset=utf-8"}
+
+
+@app.route("/sitemap.xml", methods=["GET"])
+def sitemap_xml():
+    from datetime import datetime
+    site_url = os.environ.get("SITE_URL", "https://www.healthcarethesisreview.com")
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    content = f"""<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.sitemaps.org/schemas/sitemap/0.9
+          http://www.sitemaps.org/schemas/sitemap/0.9/sitemap.xsd">
+
+  <url>
+    <loc>{site_url}/</loc>
+    <lastmod>{today}</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>1.0</priority>
+  </url>
+
+  <url>
+    <loc>{site_url}/guidelines-page</loc>
+    <lastmod>{today}</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+
+</urlset>"""
+    return content, 200, {"Content-Type": "application/xml; charset=utf-8"}
+
+
+# ---------------------------------------------------------------------------
 # Core review endpoint
 # ---------------------------------------------------------------------------
 
