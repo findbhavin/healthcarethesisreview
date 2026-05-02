@@ -1665,6 +1665,190 @@ def admin_guidelines_nlp_update():
 
 
 # ---------------------------------------------------------------------------
+# Admin — Regenerate guidelines from uploaded instruction doc + reference ZIP
+# ---------------------------------------------------------------------------
+
+@app.route("/admin/guidelines/regenerate-from-docs", methods=["POST"])
+@_admin_required
+def admin_regenerate_from_docs():
+    """
+    Accept an instruction document (DOCX/PDF) and an optional ZIP of reference
+    PDFs/DOCXs, extract all text, and ask the AI to produce a complete new
+    review_guidelines.yaml grounded in those documents.
+
+    Form fields:
+      instruction_doc  — DOCX or PDF (required)
+      reference_zip    — ZIP containing reference PDFs/DOCXs (optional)
+
+    Returns: {"proposed_yaml": "...", "summary": "...", "file_summaries": [...]}
+    """
+    import zipfile as _zipfile
+    import io as _io
+
+    # ── 1. Extract instruction document text ──────────────────────────────
+    inst_file = request.files.get("instruction_doc")
+    if not inst_file or not inst_file.filename:
+        return jsonify({"error": "No instruction document uploaded."}), 400
+
+    try:
+        inst_bytes = inst_file.read()
+        inst_text  = extract_text(inst_bytes, inst_file.filename)
+    except Exception as e:
+        return jsonify({"error": f"Could not read instruction document: {e}"}), 400
+
+    if not inst_text.strip():
+        return jsonify({"error": "Instruction document appears to be empty or unreadable."}), 400
+
+    # ── 2. Extract reference files text (from ZIP or individual upload) ───
+    ref_texts: list[dict] = []   # [{"name": filename, "text": "..."}]
+    file_summaries: list[str] = [inst_file.filename]
+
+    zip_file = request.files.get("reference_zip")
+    if zip_file and zip_file.filename:
+        try:
+            zip_bytes = zip_file.read()
+            with _zipfile.ZipFile(_io.BytesIO(zip_bytes)) as zf:
+                for entry in zf.infolist():
+                    name = entry.filename
+                    # skip directories and hidden / Mac artefact files
+                    if entry.is_dir() or name.startswith("__MACOSX") or name.startswith("."):
+                        continue
+                    ext = name.lower().rsplit(".", 1)[-1]
+                    if ext not in ("pdf", "docx", "txt"):
+                        continue
+                    with zf.open(entry) as fh:
+                        raw = fh.read()
+                    try:
+                        text = extract_text(raw, name)
+                        if text.strip():
+                            ref_texts.append({"name": name, "text": text})
+                            file_summaries.append(name)
+                    except Exception:
+                        pass   # skip unreadable files silently
+        except _zipfile.BadZipFile:
+            return jsonify({"error": "The uploaded reference file is not a valid ZIP archive."}), 400
+        except Exception as e:
+            return jsonify({"error": f"Could not process reference ZIP: {e}"}), 400
+
+    # ── 3. Build combined context for AI ─────────────────────────────────
+    ref_block = ""
+    if ref_texts:
+        ref_block = "\n\n".join(
+            f"=== REFERENCE FILE: {r['name']} ===\n{r['text'][:8000]}"
+            for r in ref_texts
+        )
+
+    # Load current YAML to extract metadata (version) for incrementing
+    try:
+        current_yaml_raw = get_guidelines_raw()
+        import yaml as _yaml
+        current_meta = _yaml.safe_load(current_yaml_raw).get("metadata", {})
+        current_version = current_meta.get("version", "3.0")
+        try:
+            new_version = str(round(float(current_version) + 1.0))
+        except ValueError:
+            new_version = "4.0"
+    except Exception:
+        new_version = "4.0"
+
+    today = datetime.date.today().isoformat()
+
+    system_prompt = (
+        "You are an expert medical journal editor and YAML architect.\n"
+        "Your task is to generate a complete, production-ready review_guidelines.yaml "
+        "file for an AI-powered peer review system.\n\n"
+        "RULES:\n"
+        "1. The INSTRUCTION DOCUMENT is the primary source of truth — every stage, "
+        "   every gate decision, every check item, and the exact output format must "
+        "   come from it.\n"
+        "2. The REFERENCE FILES ground each check with specific criteria — embed their "
+        "   requirements directly into the relevant stage checks (do not just reference "
+        "   them by name; include the actual criteria).\n"
+        "3. Produce the full YAML with: metadata (version, last_updated, maintained_by, "
+        "   journal_name, contact), behaviour_rules, role, stages (each with name, "
+        "   weight, max_score, description, checks, score_rubric, instruction), "
+        "   output_format, journal_overrides (at minimum NJCM, BMJ, PLOS_ONE), "
+        "   and changelog.\n"
+        "4. Stage weights must sum to 100. The final recommendation stage has weight 0.\n"
+        "5. Priority labels must be MAJOR / MINOR / INFO only.\n"
+        f"6. Set metadata.version to '{new_version}' and metadata.last_updated to '{today}'.\n"
+        "7. Add a changelog entry documenting this regeneration.\n"
+        "8. Output ONLY two XML-style blocks — nothing else:\n"
+        "   <summary>One sentence describing the key changes from the previous version.</summary>\n"
+        "   <yaml>\n   ...complete YAML...\n   </yaml>"
+    )
+
+    user_msg = (
+        f"=== INSTRUCTION DOCUMENT: {inst_file.filename} ===\n"
+        f"{inst_text[:25000]}\n\n"
+    )
+    if ref_block:
+        user_msg += f"=== REFERENCE FILES ===\n{ref_block[:40000]}\n\n"
+    user_msg += (
+        "Using the instruction document as the primary source and the reference files "
+        "as grounding, generate the complete review_guidelines.yaml."
+    )
+
+    # ── 4. Call AI ────────────────────────────────────────────────────────
+    try:
+        raw_response = generate_text(system_prompt, user_msg,
+                                     ai_config=_resolve_ai_config())
+    except Exception as e:
+        logger.exception("Regenerate-from-docs AI call failed")
+        return jsonify({"error": f"AI call failed: {e}"}), 500
+
+    # ── 5. Parse response ─────────────────────────────────────────────────
+    import re as _re
+    summary_match = _re.search(r"<summary>(.*?)</summary>", raw_response,
+                               _re.DOTALL | _re.IGNORECASE)
+    yaml_match    = _re.search(r"<yaml>(.*?)</yaml>", raw_response,
+                               _re.DOTALL | _re.IGNORECASE)
+
+    if not yaml_match:
+        return jsonify({
+            "error": "AI did not return a valid <yaml> block. Try again or check AI config.",
+            "raw_response": raw_response[:3000],
+        }), 500
+
+    proposed_yaml = yaml_match.group(1).strip()
+    summary       = summary_match.group(1).strip() if summary_match else "Guidelines regenerated from uploaded documents."
+
+    # ── 6. Validate proposed YAML ─────────────────────────────────────────
+    try:
+        import yaml as _yaml
+        parsed = _yaml.safe_load(proposed_yaml)
+        required_keys = {"role", "stages", "output_format"}
+        missing = required_keys - set(parsed.keys())
+        if missing:
+            return jsonify({
+                "error": f"Generated YAML is missing required keys: {missing}",
+                "proposed_yaml": proposed_yaml,
+            }), 422
+        stages = parsed.get("stages", {})
+        total_weight = sum(s.get("weight", 0) for s in stages.values())
+        if total_weight != 100:
+            return jsonify({
+                "error": f"Generated YAML stage weights sum to {total_weight}, not 100. Please regenerate.",
+                "proposed_yaml": proposed_yaml,
+            }), 422
+    except Exception as e:
+        return jsonify({
+            "error": f"Generated YAML failed validation: {e}",
+            "proposed_yaml": proposed_yaml,
+        }), 422
+
+    logger.info(f"Guidelines regenerated from docs. Files: {file_summaries}. Summary: {summary}")
+    return jsonify({
+        "proposed_yaml": proposed_yaml,
+        "summary": summary,
+        "file_summaries": file_summaries,
+        "stage_count": len(stages),
+        "total_weight": total_weight,
+        "new_version": new_version,
+    }), 200
+
+
+# ---------------------------------------------------------------------------
 # Admin GCS rule versioning endpoints
 # ---------------------------------------------------------------------------
 
