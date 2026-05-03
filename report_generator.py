@@ -1552,9 +1552,7 @@ def generate_report(review_result: dict, sample_only: bool = False) -> bytes:
     story.append(info_table)
     story.append(Spacer(1, 16))
 
-    # ── SECTION 1: Overall Category-Wise Scoring ───────────────────────────
-    story.append(Paragraph("Section 1 — Overall Category-Wise Scoring", h2_style))
-    story.append(HRFlowable(width="100%", thickness=0.8, color=C_BLUE_LIGHT, spaceAfter=8))
+    # ── Overall Category-Wise Scoring ─────────────────────────────────────
     scorecard_items = _build_scorecard(review_result, styles)
     story.extend(scorecard_items)
 
