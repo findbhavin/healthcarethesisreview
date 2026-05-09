@@ -1,1 +1,0 @@
-python3 -c "import json; print(json.load(open('/tmp/file_contents.json'))['app'])"
